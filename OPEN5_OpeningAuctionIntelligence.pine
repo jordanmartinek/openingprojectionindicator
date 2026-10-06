@@ -955,23 +955,14 @@ float primary_target_price = na
 // Normalize component scores to 0–100, then weight them
 // Each score already in 0–100 range where >50 = bullish evidence
 
-float w_total = i_w_liq_dest + i_w_delivery + i_w_overnight + i_w_sweep +
-                i_w_vwap + i_w_structure + i_w_fvg + i_w_path
+float w_total = i_w_liq_dest + i_w_delivery + i_w_overnight + i_w_sweep + i_w_vwap + i_w_structure + i_w_fvg + i_w_path
+float w_div   = w_total > 0 ? w_total : 100.0
 
 // Weighted composite (0–100); 50 = perfectly neutral
 float composite_raw = na
 
 if is_in_ny or is_ny_start
-    composite_raw :=
-        (liq_dest_score  * i_w_liq_dest  +
-         delivery_score  * i_w_delivery  +
-         on_score        * i_w_overnight +
-         sweep_score     * i_w_sweep     +
-         vwap_score      * i_w_vwap      +
-         ms_score        * i_w_structure +
-         fvg_score       * i_w_fvg       +
-         path_score      * i_w_path) /
-        (w_total > 0 ? w_total : 100.0)
+    composite_raw := (liq_dest_score * i_w_liq_dest + delivery_score * i_w_delivery + on_score * i_w_overnight + sweep_score * i_w_sweep + vwap_score * i_w_vwap + ms_score * i_w_structure + fvg_score * i_w_fvg + path_score * i_w_path) / w_div
 else
     composite_raw := 50.0
 
@@ -981,8 +972,7 @@ float composite = f_clamp(composite_raw, 0.0, 100.0)
 bool  is_bullish  = composite >= 60.0
 bool  is_bearish  = composite <= 40.0
 bool  is_neutral  = not is_bullish and not is_bearish
-bool  is_no_trade = composite >= 45.0 and composite <= 55.0 and
-                    (vwap_cross_count >= 4 or (vwap_score > 42.0 and vwap_score < 58.0))
+bool  is_no_trade = composite >= 45.0 and composite <= 55.0 and (vwap_cross_count >= 4 or (vwap_score > 42.0 and vwap_score < 58.0))
 
 string direction_label = is_no_trade  ? "NO CLEAR EDGE" :
                          is_bullish   ? "▲ BULLISH"     :
@@ -993,12 +983,7 @@ color direction_color  = is_no_trade  ? c_neutral :
                          is_bearish   ? c_bear     : c_neutral
 
 // Confidence label
-string confidence_label =
-         composite >= 90.0 ? "EXTREME CONFLUENCE"         :
-         composite >= 75.0 ? "HIGH-CONVICTION"            :
-         composite >= 60.0 ? "MODERATE DIRECTIONAL CASE"  :
-         composite >= 45.0 ? "CONFLICTING"                :
-                             "LOW QUALITY / NO CLEAR EDGE"
+string confidence_label = composite >= 90.0 ? "EXTREME CONFLUENCE" : composite >= 75.0 ? "HIGH-CONVICTION" : composite >= 60.0 ? "MODERATE DIRECTIONAL CASE" : composite >= 45.0 ? "CONFLICTING" : "LOW QUALITY / NO CLEAR EDGE"
 
 // ── Assign primary/secondary targets based on direction ──
 string primary_target_label   = "N/A"
@@ -1025,8 +1010,7 @@ if not na(primary_target_val) and array.size(liq_prices) > 0
     for i = 0 to array.size(liq_prices) - 1
         float lp = array.get(liq_prices, i)
         if not na(lp) and lp != primary_target_val
-            bool in_path = (primary_target_val > close) ? (lp > close and lp < primary_target_val) :
-                                                          (lp < close and lp > primary_target_val)
+            bool in_path = (primary_target_val > close) ? (lp > close and lp < primary_target_val) : (lp < close and lp > primary_target_val)
             if in_path
                 obstacle_count += 1
 
@@ -1038,11 +1022,8 @@ if not na(primary_target_val) and array.size(fvg_top) > 0
         int   fd = array.get(fvg_dir,  i)
         int   fs = array.get(fvg_state, i)
         if fs <= 1  // fresh or partial
-            bool in_path = (primary_target_val > close) ?
-                 (ft > close and fb < primary_target_val) :
-                 (fb < close and ft > primary_target_val)
-            bool obstructing = in_path and ((primary_target_val > close and fd == -1) or
-                                            (primary_target_val < close and fd == 1))
+            bool in_path = (primary_target_val > close) ? (ft > close and fb < primary_target_val) : (fb < close and ft > primary_target_val)
+            bool obstructing = in_path and ((primary_target_val > close and fd == -1) or (primary_target_val < close and fd == 1))
             if obstructing
                 obstacle_count += 1
 
@@ -1052,16 +1033,7 @@ path_label  := path_score >= 80.0 ? "CLEAN (" + str.tostring(math.round(path_sco
                                     "OBSTRUCTED (" + str.tostring(math.round(path_score)) + "/100)"
 
 // Recompute composite with updated path score
-composite_raw :=
-    (liq_dest_score  * i_w_liq_dest  +
-     delivery_score  * i_w_delivery  +
-     on_score        * i_w_overnight +
-     sweep_score     * i_w_sweep     +
-     vwap_score      * i_w_vwap      +
-     ms_score        * i_w_structure +
-     fvg_score       * i_w_fvg       +
-     path_score      * i_w_path) /
-    (w_total > 0 ? w_total : 100.0)
+composite_raw := (liq_dest_score * i_w_liq_dest + delivery_score * i_w_delivery + on_score * i_w_overnight + sweep_score * i_w_sweep + vwap_score * i_w_vwap + ms_score * i_w_structure + fvg_score * i_w_fvg + path_score * i_w_path) / w_div
 
 composite := f_clamp(composite_raw, 0.0, 100.0)
 
@@ -1069,8 +1041,7 @@ composite := f_clamp(composite_raw, 0.0, 100.0)
 is_bullish  := composite >= 60.0
 is_bearish  := composite <= 40.0
 is_neutral  := not is_bullish and not is_bearish
-is_no_trade := composite >= 45.0 and composite <= 55.0 and
-               (vwap_cross_count >= 4 or (vwap_score > 42.0 and vwap_score < 58.0))
+is_no_trade := composite >= 45.0 and composite <= 55.0 and (vwap_cross_count >= 4 or (vwap_score > 42.0 and vwap_score < 58.0))
 
 direction_label := is_no_trade  ? "NO CLEAR EDGE" :
                    is_bullish   ? "▲ BULLISH"     :
@@ -1080,11 +1051,7 @@ direction_color := is_no_trade  ? c_neutral :
                    is_bullish   ? c_bull     :
                    is_bearish   ? c_bear     : c_neutral
 
-confidence_label := composite >= 90.0 ? "EXTREME CONFLUENCE"         :
-                    composite >= 75.0 ? "HIGH-CONVICTION"            :
-                    composite >= 60.0 ? "MODERATE DIRECTIONAL CASE"  :
-                    composite >= 45.0 ? "CONFLICTING"                :
-                                        "LOW QUALITY / NO CLEAR EDGE"
+confidence_label := composite >= 90.0 ? "EXTREME CONFLUENCE" : composite >= 75.0 ? "HIGH-CONVICTION" : composite >= 60.0 ? "MODERATE DIRECTIONAL CASE" : composite >= 45.0 ? "CONFLICTING" : "LOW QUALITY / NO CLEAR EDGE"
 
 // ── Invalidation Level ──
 string invalidation_label = "N/A"
@@ -1546,11 +1513,7 @@ if barstate.islast and i_show_why and is_in_ny
                          is_bullish  ? "WHY " + direction_label + "  " + str.tostring(math.round(composite)) + "/100" :
                          is_bearish  ? "WHY " + direction_label + "  " + str.tostring(math.round(composite)) + "/100" :
                                        "WHY NEUTRAL  " + str.tostring(math.round(composite)) + "/100"
-    string why_full = why_dir_str + "\n" +
-                      reasons_text + "\n" +
-                      "→ TARGET: " + primary_target_label + "\n" +
-                      "→ INVALIDATION: " + invalidation_label + "\n" +
-                      "THESIS FLIP IF:\n" + flip_conditions
+    string why_full = why_dir_str + "\n" + reasons_text + "\n" + "→ TARGET: " + primary_target_label + "\n" + "→ INVALIDATION: " + invalidation_label + "\n" + "THESIS FLIP IF:\n" + flip_conditions
 
     // Place label at current bar slightly above/below price
     float label_y = is_bullish ? ny_open5_low  - (syminfo.mintick * 30) :
@@ -1590,11 +1553,7 @@ alertcondition(is_in_ny and is_no_trade,
      message = "OPEN5: NO CLEAR AUCTION EDGE — stand down")
 
 // Major liquidity sweep with no acceptance
-bool sweep_no_accept_alert =
-     (sweep_on_high_detected and not sweep_on_high_accepted) or
-     (sweep_on_low_detected  and not sweep_on_low_accepted)  or
-     (sweep_pdh_detected     and not sweep_pdh_accepted)     or
-     (sweep_pdl_detected     and not sweep_pdl_accepted)
+bool sweep_no_accept_alert = (sweep_on_high_detected and not sweep_on_high_accepted) or (sweep_on_low_detected and not sweep_on_low_accepted) or (sweep_pdh_detected and not sweep_pdh_accepted) or (sweep_pdl_detected and not sweep_pdl_accepted)
 alertcondition(is_in_ny and sweep_no_accept_alert,
      title   = "OPEN5 — Liquidity Sweep / No Acceptance",
      message = "OPEN5: Liquidity sweep detected with NO ACCEPTANCE — possible reversal")
