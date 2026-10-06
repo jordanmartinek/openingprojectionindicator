@@ -896,9 +896,11 @@ float delivery_score = f_clamp(50.0 + net_del / 2.0, 0.0, 100.0)
 float del_up_norm = f_clamp(up_del_score / 5.0, 0.0, 10.0)
 float del_dn_norm = f_clamp(dn_del_score / 5.0, 0.0, 10.0)
 
-string delivery_label = delivery_score >= 70.0 ? "BULLISH (" + str.tostring(math.round(del_up_norm), "#.0") + "/10)" :
-                        delivery_score <= 30.0 ? "BEARISH (" + str.tostring(math.round(del_dn_norm), "#.0") + "/10)" :
-                                                 "NEUTRAL"
+string delivery_label = "NEUTRAL"
+if delivery_score >= 70.0
+    delivery_label := "BULLISH (" + str.tostring(math.round(del_up_norm)) + "/10)"
+else if delivery_score <= 30.0
+    delivery_label := "BEARISH (" + str.tostring(math.round(del_dn_norm)) + "/10)"
 
 // ============================================================
 // ─── SECTION 12 — LIQUIDITY DESTINATION ENGINE ──────────────
