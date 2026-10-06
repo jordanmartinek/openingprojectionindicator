@@ -30,7 +30,7 @@
 //   19. No-Trade Detection
 // ============================================================
 
-//@version=5
+//@version=6
 indicator(title = "OPEN5 — Opening Auction Intelligence",
           shorttitle = "OPEN5",
           overlay = true,
@@ -816,10 +816,10 @@ string sec_dn_label  = "N/A"
 
 if barstate.islast and array.size(liq_prices) > 0
     for i = 0 to array.size(liq_prices) - 1
-        float lp  = array.get(liq_prices, i)
-        float ls  = array.get(liq_scores, i)
-        int   ld  = array.get(liq_dirs,   i)
-        string ll = array.get(liq_labels,  i)
+        float  lp   = array.get(liq_prices, i)
+        float  ls   = array.get(liq_scores, i)
+        int    ld   = array.get(liq_dirs,   i)
+        string llbl = array.get(liq_labels, i)
         if ld == 1
             if ls > best_up_score
                 sec_up_price  := best_up_price
@@ -827,11 +827,11 @@ if barstate.islast and array.size(liq_prices) > 0
                 sec_up_label  := best_up_label
                 best_up_price := lp
                 best_up_score := ls
-                best_up_label := ll
+                best_up_label := llbl
             else if ls > sec_up_score
                 sec_up_price  := lp
                 sec_up_score  := ls
-                sec_up_label  := ll
+                sec_up_label  := llbl
         else
             if ls > best_dn_score
                 sec_dn_price  := best_dn_price
@@ -839,11 +839,11 @@ if barstate.islast and array.size(liq_prices) > 0
                 sec_dn_label  := best_dn_label
                 best_dn_price := lp
                 best_dn_score := ls
-                best_dn_label := ll
+                best_dn_label := llbl
             else if ls > sec_dn_score
                 sec_dn_price  := lp
                 sec_dn_score  := ls
-                sec_dn_label  := ll
+                sec_dn_label  := llbl
 
 // ============================================================
 // ─── SECTION 11 — LIQUIDITY DELIVERY ENGINE ─────────────────
@@ -1229,9 +1229,13 @@ var label   lbl_onm         = na
 
 // Level labels
 if barstate.islast and i_show_levels
-    label.delete(lbl_pdh) ; label.delete(lbl_pdl)
-    label.delete(lbl_pwh) ; label.delete(lbl_pwl)
-    label.delete(lbl_onh) ; label.delete(lbl_onl) ; label.delete(lbl_onm)
+    label.delete(lbl_pdh)
+    label.delete(lbl_pdl)
+    label.delete(lbl_pwh)
+    label.delete(lbl_pwl)
+    label.delete(lbl_onh)
+    label.delete(lbl_onl)
+    label.delete(lbl_onm)
 
     if not na(pdh)
         lbl_pdh := label.new(bar_index + 2, pdh, "PDH", color = color.new(c_pdh,60), textcolor = c_pdh, size = size.tiny, style = label.style_label_left)
