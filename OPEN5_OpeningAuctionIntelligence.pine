@@ -372,9 +372,7 @@ if barstate.islast and array.size(fvg_top) > 0
         int   fst  = array.get(fvg_state, i)
         // If price has moved through more than 50% of the FVG
         if fst == 0 or fst == 1
-            float fill_pct = fdir == 1 ?
-                 (f_clamp(low - fbot, 0.0, ftop - fbot)) / (ftop - fbot) :
-                 (f_clamp(ftop - high, 0.0, ftop - fbot)) / (ftop - fbot)
+            float fill_pct = fdir == 1 ? (f_clamp(low - fbot, 0.0, ftop - fbot)) / (ftop - fbot) : (f_clamp(ftop - high, 0.0, ftop - fbot)) / (ftop - fbot)
             // Inversion: price closed entirely through the FVG from the "wrong" side
             if fdir == 1 and close < fbot
                 array.set(fvg_state, i, 4)   // inverted
@@ -416,8 +414,7 @@ if array.size(fvg_dir) > 0
 float fvg_net   = fvg_bull_score - fvg_bear_score
 float fvg_score = f_clamp(50.0 + fvg_net * 2.0, 0.0, 100.0)
 
-string fvg_label = fvg_net > 5.0 ? "BULLISH ALIGNMENT" :
-                   fvg_net < -5.0 ? "BEARISH ALIGNMENT" : "MIXED / NEUTRAL"
+string fvg_label = fvg_net > 5.0 ? "BULLISH ALIGNMENT" : fvg_net < -5.0 ? "BEARISH ALIGNMENT" : "MIXED / NEUTRAL"
 
 // ============================================================
 // ─── SECTION 5 — MARKET STRUCTURE ENGINE ────────────────────
@@ -492,10 +489,7 @@ if bos_bull
 if bos_bear
     ms_score := math.max(0.0,   ms_score - 15.0)
 
-string ms_label = ms_score >= 75.0 ? "BULLISH (HH+HL)" :
-                  ms_score >= 60.0 ? "WEAKLY BULLISH" :
-                  ms_score <= 25.0 ? "BEARISH (LL+LH)" :
-                  ms_score <= 40.0 ? "WEAKLY BEARISH" : "MIXED"
+string ms_label = ms_score >= 75.0 ? "BULLISH (HH+HL)" : ms_score >= 60.0 ? "WEAKLY BULLISH" : ms_score <= 25.0 ? "BEARISH (LL+LH)" : ms_score <= 40.0 ? "WEAKLY BEARISH" : "MIXED"
 
 // ============================================================
 // ─── SECTION 6 — OVERNIGHT RANGE ENGINE ─────────────────────
@@ -974,13 +968,9 @@ bool  is_bearish  = composite <= 40.0
 bool  is_neutral  = not is_bullish and not is_bearish
 bool  is_no_trade = composite >= 45.0 and composite <= 55.0 and (vwap_cross_count >= 4 or (vwap_score > 42.0 and vwap_score < 58.0))
 
-string direction_label = is_no_trade  ? "NO CLEAR EDGE" :
-                         is_bullish   ? "▲ BULLISH"     :
-                         is_bearish   ? "▼ BEARISH"     : "◆ NEUTRAL"
+string direction_label = is_no_trade ? "NO CLEAR EDGE" : is_bullish ? "▲ BULLISH" : is_bearish ? "▼ BEARISH" : "◆ NEUTRAL"
 
-color direction_color  = is_no_trade  ? c_neutral :
-                         is_bullish   ? c_bull     :
-                         is_bearish   ? c_bear     : c_neutral
+color direction_color = is_no_trade ? c_neutral : is_bullish ? c_bull : is_bearish ? c_bear : c_neutral
 
 // Confidence label
 string confidence_label = composite >= 90.0 ? "EXTREME CONFLUENCE" : composite >= 75.0 ? "HIGH-CONVICTION" : composite >= 60.0 ? "MODERATE DIRECTIONAL CASE" : composite >= 45.0 ? "CONFLICTING" : "LOW QUALITY / NO CLEAR EDGE"
@@ -1028,9 +1018,7 @@ if not na(primary_target_val) and array.size(fvg_top) > 0
                 obstacle_count += 1
 
 path_score := f_clamp(100.0 - float(obstacle_count) * 12.0, 20.0, 100.0)
-path_label  := path_score >= 80.0 ? "CLEAN (" + str.tostring(math.round(path_score)) + "/100)" :
-               path_score >= 60.0 ? "MODERATE (" + str.tostring(math.round(path_score)) + "/100)" :
-                                    "OBSTRUCTED (" + str.tostring(math.round(path_score)) + "/100)"
+path_label  := path_score >= 80.0 ? "CLEAN (" + str.tostring(math.round(path_score)) + "/100)" : path_score >= 60.0 ? "MODERATE (" + str.tostring(math.round(path_score)) + "/100)" : "OBSTRUCTED (" + str.tostring(math.round(path_score)) + "/100)"
 
 // Recompute composite with updated path score
 composite_raw := (liq_dest_score * i_w_liq_dest + delivery_score * i_w_delivery + on_score * i_w_overnight + sweep_score * i_w_sweep + vwap_score * i_w_vwap + ms_score * i_w_structure + fvg_score * i_w_fvg + path_score * i_w_path) / w_div
@@ -1043,13 +1031,9 @@ is_bearish  := composite <= 40.0
 is_neutral  := not is_bullish and not is_bearish
 is_no_trade := composite >= 45.0 and composite <= 55.0 and (vwap_cross_count >= 4 or (vwap_score > 42.0 and vwap_score < 58.0))
 
-direction_label := is_no_trade  ? "NO CLEAR EDGE" :
-                   is_bullish   ? "▲ BULLISH"     :
-                   is_bearish   ? "▼ BEARISH"     : "◆ NEUTRAL"
+direction_label := is_no_trade ? "NO CLEAR EDGE" : is_bullish ? "▲ BULLISH" : is_bearish ? "▼ BEARISH" : "◆ NEUTRAL"
 
-direction_color := is_no_trade  ? c_neutral :
-                   is_bullish   ? c_bull     :
-                   is_bearish   ? c_bear     : c_neutral
+direction_color := is_no_trade ? c_neutral : is_bullish ? c_bull : is_bearish ? c_bear : c_neutral
 
 confidence_label := composite >= 90.0 ? "EXTREME CONFLUENCE" : composite >= 75.0 ? "HIGH-CONVICTION" : composite >= 60.0 ? "MODERATE DIRECTIONAL CASE" : composite >= 45.0 ? "CONFLICTING" : "LOW QUALITY / NO CLEAR EDGE"
 
@@ -1240,9 +1224,7 @@ if barstate.islast and i_show_fvgs
             int   fd  = array.get(fvg_dir,     i)
             int   fs  = array.get(fvg_state,   i)
             int   fidx = array.get(fvg_bar_idx, i)
-            color bc  = fs == 2 or fs == 3 or fs == 4 ?
-                         color.new(color.gray, 92) :
-                         fd == 1 ? c_fvg_bull : c_fvg_bear
+            color bc  = (fs == 2 or fs == 3 or fs == 4) ? color.new(color.gray, 92) : (fd == 1 ? c_fvg_bull : c_fvg_bear)
             box b = box.new(fidx, ft, bar_index + 10, fb, bgcolor = bc,
                             border_color = color.new(color.gray, 80), border_width = 1)
             array.push(fvg_boxes, b)
@@ -1411,11 +1393,7 @@ if barstate.islast and i_show_dashboard
           gap_score >= 55.0 ? c_bull : gap_score <= 45.0 ? c_bear : c_neutral)
 
     // Row 12 — Sweep State
-    string sweep_text = sweep_on_low_detected and not sweep_on_low_accepted ? "ONL SWEPT (NO ACCEPT)" :
-                        sweep_on_high_detected and not sweep_on_high_accepted ? "ONH SWEPT (NO ACCEPT)" :
-                        sweep_pdl_detected and not sweep_pdl_accepted ? "PDL SWEPT (NO ACCEPT)" :
-                        sweep_pdh_detected and not sweep_pdh_accepted ? "PDH SWEPT (NO ACCEPT)" :
-                        "NO MAJOR SWEEPS"
+    string sweep_text = (sweep_on_low_detected and not sweep_on_low_accepted) ? "ONL SWEPT (NO ACCEPT)" : (sweep_on_high_detected and not sweep_on_high_accepted) ? "ONH SWEPT (NO ACCEPT)" : (sweep_pdl_detected and not sweep_pdl_accepted) ? "PDL SWEPT (NO ACCEPT)" : (sweep_pdh_detected and not sweep_pdh_accepted) ? "PDH SWEPT (NO ACCEPT)" : "NO MAJOR SWEEPS"
     f_row(dash, 12, "SWEEPS", sweep_text,
           str.contains(sweep_text, "NO ACCEPT") ? c_neutral : color.new(color.gray, 30))
 
@@ -1472,9 +1450,7 @@ if barstate.islast and i_show_dashboard
                text_halign = text.align_left)
 
     // Row 20 — Projection arrow
-    string proj_arrow = is_bullish ? "↑ → " + primary_target_label :
-                        is_bearish ? "↓ → " + primary_target_label :
-                                     "◆ → ROTATIONAL"
+    string proj_arrow = is_bullish ? "↑ → " + primary_target_label : is_bearish ? "↓ → " + primary_target_label : "◆ → ROTATIONAL"
     f_row(dash, 20, "PROJECTION", proj_arrow, direction_color)
 
     // Row 21 — No-trade warning
@@ -1509,16 +1485,11 @@ var label why_label = na
 if barstate.islast and i_show_why and is_in_ny
     label.delete(why_label)
 
-    string why_dir_str = is_no_trade ? "⚠ NO CLEAR AUCTION EDGE" :
-                         is_bullish  ? "WHY " + direction_label + "  " + str.tostring(math.round(composite)) + "/100" :
-                         is_bearish  ? "WHY " + direction_label + "  " + str.tostring(math.round(composite)) + "/100" :
-                                       "WHY NEUTRAL  " + str.tostring(math.round(composite)) + "/100"
+    string why_dir_str = is_no_trade ? "⚠ NO CLEAR AUCTION EDGE" : (is_neutral ? "WHY NEUTRAL  " : "WHY " + direction_label + "  ") + str.tostring(math.round(composite)) + "/100"
     string why_full = why_dir_str + "\n" + reasons_text + "\n" + "→ TARGET: " + primary_target_label + "\n" + "→ INVALIDATION: " + invalidation_label + "\n" + "THESIS FLIP IF:\n" + flip_conditions
 
     // Place label at current bar slightly above/below price
-    float label_y = is_bullish ? ny_open5_low  - (syminfo.mintick * 30) :
-                    is_bearish ? ny_open5_high + (syminfo.mintick * 30) :
-                    close
+    float label_y = is_bullish ? ny_open5_low - (syminfo.mintick * 30) : is_bearish ? ny_open5_high + (syminfo.mintick * 30) : close
 
     why_label := label.new(
          bar_index - 10, label_y, why_full,
