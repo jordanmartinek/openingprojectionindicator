@@ -1160,7 +1160,8 @@ if array.size(reasons_arr) > 0
 // ============================================================
 
 // ── VWAP (per-bar series — correctly tracks price, so keep it as a plot) ──
-plot(i_show_levels and is_in_ny ? ny_vwap : na, "VWAP", color = c_vwap, linewidth = 2, style = plot.style_linebr)
+// force_overlay guarantees it renders on the main price pane / scale.
+plot(i_show_levels and is_in_ny ? ny_vwap : na, "VWAP", color = c_vwap, linewidth = 2, style = plot.style_linebr, force_overlay = true)
 
 // ── Static horizontal levels drawn as LINE objects anchored to price ──
 // Using line objects (xloc.bar_index) keeps every level locked to its real
@@ -1202,14 +1203,14 @@ f_level(ln, lbl, price, txt, col, txtcol, lblstyle, left_x, right_x) =>
         out_lbl := na
     else
         if na(ln)
-            out_ln := line.new(left_x, price, right_x, price, xloc = xloc.bar_index, color = col, width = 1, extend = extend.none)
+            out_ln := line.new(left_x, price, right_x, price, xloc = xloc.bar_index, color = col, width = 1, extend = extend.none, force_overlay = true)
         else
             line.set_xy1(ln, left_x,  price)
             line.set_xy2(ln, right_x, price)
             line.set_color(ln, col)
             out_ln := ln
         if na(lbl)
-            out_lbl := label.new(right_x, price, txt, xloc = xloc.bar_index, color = color.new(col, 70), textcolor = txtcol, size = size.tiny, style = lblstyle)
+            out_lbl := label.new(right_x, price, txt, xloc = xloc.bar_index, color = color.new(col, 70), textcolor = txtcol, size = size.tiny, style = lblstyle, force_overlay = true)
         else
             label.set_xy(lbl, right_x, price)
             label.set_text(lbl, txt)
@@ -1268,7 +1269,7 @@ if barstate.islast and i_show_fvgs
             int   fidx = array.get(fvg_bar_idx, i)
             color bc  = (fs == 2 or fs == 3 or fs == 4) ? color.new(color.gray, 92) : (fd == 1 ? c_fvg_bull : c_fvg_bear)
             box b = box.new(fidx, ft, bar_index + 10, fb, bgcolor = bc,
-                            border_color = color.new(color.gray, 80), border_width = 1)
+                            border_color = color.new(color.gray, 80), border_width = 1, force_overlay = true)
             array.push(fvg_boxes, b)
 
 // ── Projection Zone ──
@@ -1289,45 +1290,45 @@ if barstate.islast and i_show_projection and is_in_ny
         float target_band = syminfo.mintick * 10.0
         proj_box_1 := box.new(bar_index, primary_target_val + target_band,
                               bar_index + 20, primary_target_val - target_band,
-                              bgcolor = proj_col, border_color = proj_line_col, border_width = 1)
+                              bgcolor = proj_col, border_color = proj_line_col, border_width = 1, force_overlay = true)
         // Projection line from current close to primary target
         proj_line := line.new(bar_index, close, bar_index + 15, primary_target_val,
-                              color = proj_line_col, width = 2, style = line.style_dashed)
+                              color = proj_line_col, width = 2, style = line.style_dashed, force_overlay = true)
 
     // Secondary target zone
     if not na(secondary_target_val)
         float target_band2 = syminfo.mintick * 10.0
         proj_box_2 := box.new(bar_index + 20, secondary_target_val + target_band2,
                               bar_index + 40, secondary_target_val - target_band2,
-                              bgcolor = proj_col, border_color = color.new(proj_line_col, 60), border_width = 1)
+                              bgcolor = proj_col, border_color = color.new(proj_line_col, 60), border_width = 1, force_overlay = true)
 
 // ── Sweep Labels ──
 // Mark sweep events on chart
 if sweep_on_high_detected and sweep_on_high_detected[1] == false
     label.new(bar_index, high, "ONH\nSWEEP",
               color = color.new(c_bear, 70), textcolor = c_bear,
-              size = size.tiny, style = label.style_label_down)
+              size = size.tiny, style = label.style_label_down, force_overlay = true)
 
 if sweep_on_low_detected and sweep_on_low_detected[1] == false
     label.new(bar_index, low, "ONL\nSWEEP",
               color = color.new(c_bull, 70), textcolor = c_bull,
-              size = size.tiny, style = label.style_label_up)
+              size = size.tiny, style = label.style_label_up, force_overlay = true)
 
 if sweep_pdh_detected and sweep_pdh_detected[1] == false
     label.new(bar_index, high, "PDH\nSWEEP",
               color = color.new(c_bear, 70), textcolor = c_bear,
-              size = size.tiny, style = label.style_label_down)
+              size = size.tiny, style = label.style_label_down, force_overlay = true)
 
 if sweep_pdl_detected and sweep_pdl_detected[1] == false
     label.new(bar_index, low, "PDL\nSWEEP",
               color = color.new(c_bull, 70), textcolor = c_bull,
-              size = size.tiny, style = label.style_label_up)
+              size = size.tiny, style = label.style_label_up, force_overlay = true)
 
 // ── Thesis Flip Label ──
 if thesis_just_flipped
     label.new(bar_index, high, "⚠ " + flip_reason,
               color = color.new(c_neutral, 60), textcolor = c_neutral,
-              size = size.small, style = label.style_label_down)
+              size = size.small, style = label.style_label_down, force_overlay = true)
 
 // ── Opening 5-Min box ──
 var box open5_box = na
@@ -1340,7 +1341,7 @@ if is_in_ny and ny_bar_count == 1
                          ny_open5_low,
                          bgcolor  = color.new(color.white, 93),
                          border_color = color.new(color.white, 50),
-                         border_width = 1)
+                         border_width = 1, force_overlay = true)
 
 if is_in_ny and not na(open5_box)
     box.set_top(open5_box,    ny_open5_high)
@@ -1539,7 +1540,7 @@ if barstate.islast and i_show_why and is_in_ny
          textcolor  = direction_color,
          size       = size.small,
          style      = is_bullish ? label.style_label_up : label.style_label_down,
-         textalign  = text.align_left)
+         textalign  = text.align_left, force_overlay = true)
 
 // ============================================================
 // ─── SECTION 20 — ALERTS ────────────────────────────────────
