@@ -1,6 +1,6 @@
 // ============================================================
 // OPEN5 — OPENING AUCTION INTELLIGENCE
-// Version: 1.0.0
+// Version: 1.1.0
 // Designed for: NQ Futures (configurable)
 // Timeframe: Optimized for 1-min and 5-min charts
 //
@@ -31,6 +31,9 @@
 // ============================================================
 
 //@version=6
+// v1.1.0 — Added two auto-switching modes (OPENING DRIVE / CONTINUATION),
+//          scored opening-5-min candle component, phase-aware weighting,
+//          frozen opening thesis with live status, and a running hit-rate.
 indicator(title = "OPEN5 — Opening Auction Intelligence",
           shorttitle = "OPEN5",
           overlay = true,
@@ -673,6 +676,38 @@ if is_in_ny and not na(ny_open_price)
         else
             open5_state := "RANGE ROTATION"
 
+// ── Opening-5-min DIRECTIONAL SCORE (0 = bearish, 50 = neutral, 100 = bullish) ──
+// This turns the opening candle into a real weighted component. It reads the
+// developing candle's directional efficiency, wick rejection and location.
+float open5_score = 50.0
+
+if is_in_ny and not na(ny_open_price)
+    float o5_rng   = ny_open5_high - ny_open5_low
+    float o5_body  = ny_open5_close - ny_open_price           // signed body
+    float o5_br    = o5_rng > 0 ? o5_body / o5_rng : 0.0      // signed body/range (-1..+1)
+    float o5_wtop  = ny_open5_high - math.max(ny_open_price, ny_open5_close)
+    float o5_wbot  = math.min(ny_open_price, ny_open5_close) - ny_open5_low
+
+    // Base: directional efficiency of the body (−1..+1 → 0..100)
+    open5_score := f_clamp(50.0 + o5_br * 50.0, 0.0, 100.0)
+
+    // Wick rejection: a long lower wick is bullish (sellers rejected); long upper wick bearish
+    if o5_rng > 0
+        float wick_bias = (o5_wbot - o5_wtop) / o5_rng        // + = bullish rejection
+        open5_score := f_clamp(open5_score + wick_bias * 20.0, 0.0, 100.0)
+
+    // State overrides for the clearest cases
+    if open5_state == "BULLISH DISPLACEMENT"
+        open5_score := math.max(open5_score, 80.0)
+    else if open5_state == "BEARISH DISPLACEMENT"
+        open5_score := math.min(open5_score, 20.0)
+    else if open5_state == "LIQUIDITY SWEEP (DOWNSIDE)" or open5_state == "REVERSION (BULL)"
+        open5_score := math.max(open5_score, 68.0)
+    else if open5_state == "LIQUIDITY SWEEP (UPSIDE)" or open5_state == "REVERSION (BEAR)"
+        open5_score := math.min(open5_score, 32.0)
+    else if open5_state == "ROTATIONAL / INDECISIVE" or open5_state == "LIQUIDITY TRAP" or open5_state == "RANGE ROTATION"
+        open5_score := 50.0 + (open5_score - 50.0) * 0.4      // dampen toward neutral
+
 // ============================================================
 // ─── SECTION 9 — OPENING GAP ENGINE ─────────────────────────
 // ============================================================
@@ -943,20 +978,51 @@ float primary_target_price = na
 // For now, stub. Path score will be refined below.
 
 // ============================================================
+// ─── SECTION 13B — SESSION PHASE / MODE DETECTION ───────────
+// ============================================================
+// Two auto-switching modes:
+//   OPENING DRIVE  — the first 5 minutes after the NY open (the headline).
+//   CONTINUATION   — the rest of the NY session (live context).
+
+int bars_per_5min_phase = timeframe.multiplier <= 1 ? 5 : 1
+bool is_opening_phase = is_in_ny and ny_bar_count <= bars_per_5min_phase
+bool is_continuation  = is_in_ny and not is_opening_phase
+
+string mode_label = is_opening_phase ? "◉ OPENING DRIVE" : is_continuation ? "▸ CONTINUATION" : "— PRE / POST —"
+
+// ============================================================
 // ─── SECTION 14 — COMPOSITE AUCTION SCORE ───────────────────
 // ============================================================
 
-// Normalize component scores to 0–100, then weight them
-// Each score already in 0–100 range where >50 = bullish evidence
+// Each engine score is in 0–100 range where >50 = bullish evidence.
+// During OPENING DRIVE we weight opening-relevant evidence (opening candle,
+// overnight location, gap, sweep) far more heavily. During CONTINUATION we
+// use the user's standard session weights plus delivery/structure emphasis.
 
-float w_total = i_w_liq_dest + i_w_delivery + i_w_overnight + i_w_sweep + i_w_vwap + i_w_structure + i_w_fvg + i_w_path
+// Opening-candle & gap engines get their own weights, phase-dependent.
+float w_open5_opening = 25.0   // opening candle dominates the opening phase
+float w_open5_cont    = 3.0    // nearly irrelevant later
+
+// Phase-adjusted weights
+float wk_liq_dest  = is_opening_phase ? i_w_liq_dest * 0.6 : i_w_liq_dest
+float wk_delivery  = is_opening_phase ? i_w_delivery * 0.6 : i_w_delivery
+float wk_overnight = is_opening_phase ? i_w_overnight * 1.6 : i_w_overnight
+float wk_sweep     = is_opening_phase ? i_w_sweep * 1.6 : i_w_sweep
+float wk_vwap      = is_opening_phase ? i_w_vwap * 0.5 : i_w_vwap
+float wk_structure = is_opening_phase ? i_w_structure * 0.4 : i_w_structure
+float wk_fvg       = i_w_fvg
+float wk_path      = i_w_path
+float wk_gap       = is_opening_phase ? 15.0 : 2.0
+float wk_open5     = is_opening_phase ? w_open5_opening : w_open5_cont
+
+float w_total = wk_liq_dest + wk_delivery + wk_overnight + wk_sweep + wk_vwap + wk_structure + wk_fvg + wk_path + wk_gap + wk_open5
 float w_div   = w_total > 0 ? w_total : 100.0
 
 // Weighted composite (0–100); 50 = perfectly neutral
 float composite_raw = na
 
 if is_in_ny or is_ny_start
-    composite_raw := (liq_dest_score * i_w_liq_dest + delivery_score * i_w_delivery + on_score * i_w_overnight + sweep_score * i_w_sweep + vwap_score * i_w_vwap + ms_score * i_w_structure + fvg_score * i_w_fvg + path_score * i_w_path) / w_div
+    composite_raw := (liq_dest_score * wk_liq_dest + delivery_score * wk_delivery + on_score * wk_overnight + sweep_score * wk_sweep + vwap_score * wk_vwap + ms_score * wk_structure + fvg_score * wk_fvg + path_score * wk_path + gap_score * wk_gap + open5_score * wk_open5) / w_div
 else
     composite_raw := 50.0
 
@@ -1020,8 +1086,8 @@ if not na(primary_target_val) and array.size(fvg_top) > 0
 path_score := f_clamp(100.0 - float(obstacle_count) * 12.0, 20.0, 100.0)
 path_label  := path_score >= 80.0 ? "CLEAN (" + str.tostring(math.round(path_score)) + "/100)" : path_score >= 60.0 ? "MODERATE (" + str.tostring(math.round(path_score)) + "/100)" : "OBSTRUCTED (" + str.tostring(math.round(path_score)) + "/100)"
 
-// Recompute composite with updated path score
-composite_raw := (liq_dest_score * i_w_liq_dest + delivery_score * i_w_delivery + on_score * i_w_overnight + sweep_score * i_w_sweep + vwap_score * i_w_vwap + ms_score * i_w_structure + fvg_score * i_w_fvg + path_score * i_w_path) / w_div
+// Recompute composite with updated path score (uses phase-adjusted weights)
+composite_raw := (liq_dest_score * wk_liq_dest + delivery_score * wk_delivery + on_score * wk_overnight + sweep_score * wk_sweep + vwap_score * wk_vwap + ms_score * wk_structure + fvg_score * wk_fvg + path_score * wk_path + gap_score * wk_gap + open5_score * wk_open5) / w_div
 
 composite := f_clamp(composite_raw, 0.0, 100.0)
 
@@ -1053,6 +1119,70 @@ else if is_bearish
     invalidation_label := o5h_inv + " / " + onh_inv + vwap_inv
 else
     invalidation_label := "Clear break of overnight range"
+
+// ============================================================
+// ─── SECTION 14B — FROZEN OPENING THESIS + HIT-RATE ─────────
+// ============================================================
+// At the END of the opening 5-min window, freeze the opening-drive call
+// (direction, target, invalidation). Then, during CONTINUATION, track
+// whether that frozen call is STILL VALID / TARGET HIT / INVALIDATED, and
+// accumulate a running hit-rate across sessions.
+
+var int    op_dir           = 0        // frozen opening direction: 1 bull, -1 bear, 0 neutral
+var float  op_score         = na       // frozen opening conviction
+var string op_dir_label     = "N/A"
+var string op_target_label  = "N/A"
+var float  op_target_val    = na
+var float  op_invalid_val   = na       // price that invalidates the opening call
+var string op_status        = "AWAITING OPEN"
+var color  op_status_col    = color.gray
+var bool   op_resolved      = false    // has this session's call hit target or invalidated?
+
+// Running hit-rate across sessions (persists via var)
+var int    hr_total         = 0
+var int    hr_hits          = 0
+
+// Reset per-session resolution flag at the open
+if is_ny_start
+    op_status   := "FORMING…"
+    op_status_col := color.new(color.gray, 0)
+    op_resolved := false
+
+// Freeze the call on the LAST bar of the opening window (ny_bar_count == bars_per_5min_phase)
+bool opening_window_close = is_in_ny and ny_bar_count == bars_per_5min_phase
+
+if opening_window_close
+    op_dir          := is_bullish ? 1 : is_bearish ? -1 : 0
+    op_score        := composite
+    op_dir_label    := direction_label
+    op_target_label := primary_target_label
+    op_target_val   := primary_target_val
+    // Invalidation price: opening low (bull) / opening high (bear)
+    op_invalid_val  := is_bullish ? ny_open5_low : is_bearish ? ny_open5_high : na
+    op_status       := "ACTIVE"
+    op_status_col   := op_dir == 1 ? c_bull : op_dir == -1 ? c_bear : c_neutral
+    // Count this as a new tracked call (only if directional)
+    if op_dir != 0
+        hr_total := hr_total + 1
+
+// During CONTINUATION, evaluate the frozen opening call
+if is_continuation and not op_resolved and op_dir != 0
+    bool hit_target = not na(op_target_val) and ((op_dir == 1 and high >= op_target_val) or (op_dir == -1 and low <= op_target_val))
+    bool invalidated = not na(op_invalid_val) and ((op_dir == 1 and close < op_invalid_val) or (op_dir == -1 and close > op_invalid_val))
+    if hit_target
+        op_status     := "✓ TARGET HIT"
+        op_status_col := c_bull
+        op_resolved   := true
+        hr_hits       := hr_hits + 1
+    else if invalidated
+        op_status     := "✗ INVALIDATED"
+        op_status_col := c_bear
+        op_resolved   := true
+    else
+        op_status     := "• STILL VALID"
+        op_status_col := c_neutral
+
+float hit_rate_pct = hr_total > 0 ? float(hr_hits) / float(hr_total) * 100.0 : na
 
 // ============================================================
 // ─── SECTION 15 — SCENARIO FLIP DETECTION ───────────────────
@@ -1370,21 +1500,21 @@ f_row(tbl, r, lbl, val, val_col) =>
 if barstate.islast and i_show_dashboard
     table.delete(dash)
     dash := table.new(
-         position.top_right, 2, 22,
+         position.top_right, 2, 26,
          bgcolor      = color.new(color.black, 10),
          border_color = color.new(color.gray, 60),
          border_width = 1,
          frame_color  = color.new(color.gray, 40),
          frame_width  = 1)
 
-    // Row 0 — Header
+    // Row 0 — Header (shows the active MODE)
     table.cell(dash, 0, 0, "OPEN5",
                text_color  = color.white,
                text_size   = size.normal,
                bgcolor     = color.new(color.navy, 10),
                text_halign = text.align_right)
-    table.cell(dash, 1, 0, "AUCTION INTELLIGENCE",
-               text_color  = color.new(color.aqua, 10),
+    table.cell(dash, 1, 0, mode_label,
+               text_color  = is_opening_phase ? c_bull : color.new(color.aqua, 10),
                text_size   = size.normal,
                bgcolor     = color.new(color.navy, 10),
                text_halign = text.align_left)
@@ -1519,6 +1649,31 @@ if barstate.islast and i_show_dashboard
                    text_size   = size.tiny,
                    bgcolor     = color.new(color.black, 30))
 
+    // Row 22 — Section divider: FROZEN OPENING CALL
+    table.cell(dash, 0, 22, "OPENING CALL",
+               text_color  = color.white,
+               text_size   = size.small,
+               bgcolor     = color.new(color.purple, 20),
+               text_halign = text.align_right)
+    string op_call_str = op_dir == 0 ? op_dir_label : op_dir_label + "  " + (na(op_score) ? "" : str.tostring(math.round(op_score)) + "/100")
+    table.cell(dash, 1, 22, op_call_str,
+               text_color  = op_dir == 1 ? c_bull : op_dir == -1 ? c_bear : c_neutral,
+               text_size   = size.small,
+               bgcolor     = color.new(color.purple, 20),
+               text_halign = text.align_left)
+
+    // Row 23 — Frozen opening target
+    f_row(dash, 23, "OPEN TARGET",
+          op_target_label + (not na(op_target_val) ? "  (" + str.tostring(op_target_val, format.mintick) + ")" : ""),
+          op_dir == 1 ? c_bull : op_dir == -1 ? c_bear : c_neutral)
+
+    // Row 24 — Live status of the opening call
+    f_row(dash, 24, "OPEN STATUS", op_status, op_status_col)
+
+    // Row 25 — Running hit-rate across sessions
+    string hr_str = na(hit_rate_pct) ? "— (no calls yet)" : str.tostring(math.round(hit_rate_pct)) + "%  (" + str.tostring(hr_hits) + "/" + str.tostring(hr_total) + ")"
+    f_row(dash, 25, "HIT RATE", hr_str, hit_rate_pct >= 50.0 ? c_bull : na(hit_rate_pct) ? color.gray : c_bear)
+
 // ============================================================
 // ─── SECTION 19 — "WHY?" LABEL ON CHART ─────────────────────
 // ============================================================
@@ -1571,6 +1726,21 @@ bool sweep_no_accept_alert = (sweep_on_high_detected and not sweep_on_high_accep
 alertcondition(is_in_ny and sweep_no_accept_alert,
      title   = "OPEN5 — Liquidity Sweep / No Acceptance",
      message = "OPEN5: Liquidity sweep detected with NO ACCEPTANCE — possible reversal")
+
+// Opening drive call frozen (end of first 5 minutes)
+alertcondition(opening_window_close,
+     title   = "OPEN5 — Opening Drive Call Set",
+     message = "OPEN5: Opening 5-min drive call locked in — see dashboard for direction/target")
+
+// Opening call target hit
+alertcondition(is_continuation and op_status == "✓ TARGET HIT" and op_status[1] != "✓ TARGET HIT",
+     title   = "OPEN5 — Opening Target Hit",
+     message = "OPEN5: The frozen opening call reached its target")
+
+// Opening call invalidated
+alertcondition(is_continuation and op_status == "✗ INVALIDATED" and op_status[1] != "✗ INVALIDATED",
+     title   = "OPEN5 — Opening Call Invalidated",
+     message = "OPEN5: The frozen opening call was invalidated")
 
 // ============================================================
 // ─── END — OPEN5 OPENING AUCTION INTELLIGENCE ───────────────

@@ -12,6 +12,15 @@ Instead, every NY session it continuously answers five questions:
 
 Designed primarily for **NQ futures** on **1-minute and 5-minute** charts, using higher-timeframe and session levels for context. It works on any symbol you load on the chart.
 
+## Two auto-switching modes
+
+The engine evaluates the market continuously all session, but it clearly signals *which question it is answering* right now:
+
+- **◉ OPENING DRIVE** — active during the **first 5 minutes** after the NY open (9:30–9:35). This is the headline: the opening-move prediction. The opening-5-min candle becomes a **dominant, scored component**, and the weights shift toward opening-relevant evidence (overnight location, gap, sweep, opening candle). At the 5-minute mark the call is **frozen**.
+- **▸ CONTINUATION** — the rest of the session. The engine keeps evaluating live, but it also shows the **frozen opening call** and its live status: `• STILL VALID`, `✓ TARGET HIT`, or `✗ INVALIDATED`.
+
+A running **HIT RATE** (targets hit ÷ directional opening calls) accumulates across sessions so you can measure how often the opening-move call actually works out — the dashboard shows it as `NN%  (hits/total)`.
+
 > File: [`OPEN5_OpeningAuctionIntelligence.pine`](OPEN5_OpeningAuctionIntelligence.pine)
 
 ---
