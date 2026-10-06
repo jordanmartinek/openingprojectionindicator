@@ -1159,51 +1159,93 @@ if array.size(reasons_arr) > 0
 // ─── SECTION 17 — PLOT LEVELS & VISUAL ELEMENTS ─────────────
 // ============================================================
 
-// ── Static level plots ──
-plot(i_show_levels ? pdh         : na, "PDH",       color = c_pdh,   linewidth = 1, style = plot.style_linebr)
-plot(i_show_levels ? pdl         : na, "PDL",       color = c_pdh,   linewidth = 1, style = plot.style_linebr)
-plot(i_show_levels ? pwh         : na, "PWH",       color = c_pwh,   linewidth = 1, style = plot.style_linebr)
-plot(i_show_levels ? pwl         : na, "PWL",       color = c_pwh,   linewidth = 1, style = plot.style_linebr)
-plot(i_show_levels ? on_high     : na, "ONH",       color = c_on,    linewidth = 1, style = plot.style_linebr)
-plot(i_show_levels ? on_low      : na, "ONL",       color = c_on,    linewidth = 1, style = plot.style_linebr)
-plot(i_show_levels ? on_mid      : na, "ON MID",    color = color.new(c_on, 40), linewidth = 1, style = plot.style_linebr)
-plot(i_show_levels ? ny_vwap     : na, "VWAP",      color = c_vwap,  linewidth = 2, style = plot.style_linebr)
-plot(i_show_levels ? ny_open5_high : na, "O5 High", color = color.new(color.white, 60), linewidth = 1, style = plot.style_linebr)
-plot(i_show_levels ? ny_open5_low  : na, "O5 Low",  color = color.new(color.white, 60), linewidth = 1, style = plot.style_linebr)
+// ── VWAP (per-bar series — correctly tracks price, so keep it as a plot) ──
+plot(i_show_levels and is_in_ny ? ny_vwap : na, "VWAP", color = c_vwap, linewidth = 2, style = plot.style_linebr)
 
-// ── Dynamic labels for levels (drawn once on last bar) ──
-var label   lbl_pdh         = na
-var label   lbl_pdl         = na
-var label   lbl_pwh         = na
-var label   lbl_pwl         = na
-var label   lbl_onh         = na
-var label   lbl_onl         = na
-var label   lbl_onm         = na
+// ── Static horizontal levels drawn as LINE objects anchored to price ──
+// Using line objects (xloc.bar_index) keeps every level locked to its real
+// price coordinate, so lines and labels stay attached when zooming/panning.
 
-// Level labels
-if barstate.islast and i_show_levels
-    label.delete(lbl_pdh)
-    label.delete(lbl_pdl)
-    label.delete(lbl_pwh)
-    label.delete(lbl_pwl)
-    label.delete(lbl_onh)
-    label.delete(lbl_onl)
-    label.delete(lbl_onm)
+var line  ln_pdh = na
+var line  ln_pdl = na
+var line  ln_pwh = na
+var line  ln_pwl = na
+var line  ln_onh = na
+var line  ln_onl = na
+var line  ln_onm = na
+var line  ln_o5h = na
+var line  ln_o5l = na
 
-    if not na(pdh)
-        lbl_pdh := label.new(bar_index + 2, pdh, "PDH", color = color.new(c_pdh,60), textcolor = c_pdh, size = size.tiny, style = label.style_label_left)
-    if not na(pdl)
-        lbl_pdl := label.new(bar_index + 2, pdl, "PDL", color = color.new(c_pdh,60), textcolor = c_pdh, size = size.tiny, style = label.style_label_left)
-    if not na(pwh)
-        lbl_pwh := label.new(bar_index + 2, pwh, "PWH", color = color.new(c_pwh,60), textcolor = c_pwh, size = size.tiny, style = label.style_label_left)
-    if not na(pwl)
-        lbl_pwl := label.new(bar_index + 2, pwl, "PWL", color = color.new(c_pwh,60), textcolor = c_pwh, size = size.tiny, style = label.style_label_left)
-    if not na(on_high)
-        lbl_onh := label.new(bar_index + 2, on_high, "ONH", color = color.new(c_on,60), textcolor = c_on, size = size.tiny, style = label.style_label_left)
-    if not na(on_low)
-        lbl_onl := label.new(bar_index + 2, on_low,  "ONL", color = color.new(c_on,60), textcolor = c_on, size = size.tiny, style = label.style_label_left)
-    if not na(on_mid)
-        lbl_onm := label.new(bar_index + 2, on_mid,  "ON MID", color = color.new(c_on,80), textcolor = color.new(c_on,20), size = size.tiny, style = label.style_label_left)
+var label lbl_pdh = na
+var label lbl_pdl = na
+var label lbl_pwh = na
+var label lbl_pwl = na
+var label lbl_onh = na
+var label lbl_onl = na
+var label lbl_onm = na
+var label lbl_o5h = na
+var label lbl_o5l = na
+
+// How far back the level starts, and how far it extends to the right
+int level_left  = bar_index - i_liq_lookback
+int level_right = bar_index + 15
+
+// Helper: create or update a horizontal level line + its right-side label.
+// Returns the (possibly new) line and label via a tuple.
+f_level(ln, lbl, price, txt, col, txtcol, lblstyle, left_x, right_x) =>
+    line  out_ln  = ln
+    label out_lbl = lbl
+    if na(price)
+        line.delete(ln)
+        label.delete(lbl)
+        out_ln  := na
+        out_lbl := na
+    else
+        if na(ln)
+            out_ln := line.new(left_x, price, right_x, price, xloc = xloc.bar_index, color = col, width = 1, extend = extend.none)
+        else
+            line.set_xy1(ln, left_x,  price)
+            line.set_xy2(ln, right_x, price)
+            line.set_color(ln, col)
+            out_ln := ln
+        if na(lbl)
+            out_lbl := label.new(right_x, price, txt, xloc = xloc.bar_index, color = color.new(col, 70), textcolor = txtcol, size = size.tiny, style = lblstyle)
+        else
+            label.set_xy(lbl, right_x, price)
+            label.set_text(lbl, txt)
+            label.set_textcolor(lbl, txtcol)
+            out_lbl := lbl
+    [out_ln, out_lbl]
+
+// Redraw levels on every bar so they stay anchored and extend with price.
+if i_show_levels
+    [a1, a2] = f_level(ln_pdh, lbl_pdh, pdh,          "PDH",    c_pdh, c_pdh,                 label.style_label_left, level_left, level_right)
+    ln_pdh  := a1
+    lbl_pdh := a2
+    [b1, b2] = f_level(ln_pdl, lbl_pdl, pdl,          "PDL",    c_pdh, c_pdh,                 label.style_label_left, level_left, level_right)
+    ln_pdl  := b1
+    lbl_pdl := b2
+    [c1, c2] = f_level(ln_pwh, lbl_pwh, pwh,          "PWH",    c_pwh, c_pwh,                 label.style_label_left, level_left, level_right)
+    ln_pwh  := c1
+    lbl_pwh := c2
+    [d1, d2] = f_level(ln_pwl, lbl_pwl, pwl,          "PWL",    c_pwh, c_pwh,                 label.style_label_left, level_left, level_right)
+    ln_pwl  := d1
+    lbl_pwl := d2
+    [e1, e2] = f_level(ln_onh, lbl_onh, on_high,      "ONH",    c_on,  c_on,                  label.style_label_left, level_left, level_right)
+    ln_onh  := e1
+    lbl_onh := e2
+    [f1, f2] = f_level(ln_onl, lbl_onl, on_low,       "ONL",    c_on,  c_on,                  label.style_label_left, level_left, level_right)
+    ln_onl  := f1
+    lbl_onl := f2
+    [g1, g2] = f_level(ln_onm, lbl_onm, on_mid,       "ON MID", color.new(c_on, 40), color.new(c_on, 20), label.style_label_left, level_left, level_right)
+    ln_onm  := g1
+    lbl_onm := g2
+    [h1, h2] = f_level(ln_o5h, lbl_o5h, ny_open5_high,"O5H",    color.new(color.white, 50), color.new(color.white, 20), label.style_label_left, level_left, level_right)
+    ln_o5h  := h1
+    lbl_o5h := h2
+    [k1, k2] = f_level(ln_o5l, lbl_o5l, ny_open5_low, "O5L",    color.new(color.white, 50), color.new(color.white, 20), label.style_label_left, level_left, level_right)
+    ln_o5l  := k1
+    lbl_o5l := k2
 
 // ── FVG Boxes ──
 var box[] fvg_boxes = array.new_box(0)
