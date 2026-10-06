@@ -1,0 +1,1598 @@
+// ============================================================
+// OPEN5 — OPENING AUCTION INTELLIGENCE
+// Version: 1.0.0
+// Designed for: NQ Futures (configurable)
+// Timeframe: Optimized for 1-min and 5-min charts
+//
+// PURPOSE: Real-time probabilistic auction thesis builder.
+// Answers: WHERE is price going? WHY? WHAT supports the case?
+//          WHAT invalidates it? HOW strong is the case?
+//
+// ENGINES:
+//   1.  NY Opening Session
+//   2.  Liquidity Pool Engine
+//   3.  Liquidity Destination Engine
+//   4.  Liquidity Delivery Engine
+//   5.  Overnight Range Engine
+//   6.  Liquidity Sweep/Trap Engine
+//   7.  Opening 5-Minute Candle Engine
+//   8.  VWAP Engine
+//   9.  FVG Engine
+//   10. Liquidity Path Engine
+//   11. Opening Gap Engine
+//   12. Market Structure Engine
+//   13. Opening Auction Score (composite 0–100)
+//   14. Real-Time Thesis (dynamic updates)
+//   15. Scenario Flip Detection
+//   16. Visual Chart Projection
+//   17. Right-Side Dashboard
+//   18. "Why?" Explanation
+//   19. No-Trade Detection
+// ============================================================
+
+//@version=5
+indicator(title = "OPEN5 — Opening Auction Intelligence",
+          shorttitle = "OPEN5",
+          overlay = true,
+          max_lines_count = 150,
+          max_labels_count = 150,
+          max_boxes_count  = 150)
+
+// ============================================================
+// ─── SECTION 0 — INPUTS ─────────────────────────────────────
+// ============================================================
+
+// ── Session Times ──
+grp_sessions = "Session Times (Exchange Timezone)"
+i_tz            = input.string("America/New_York", "Timezone", group = grp_sessions)
+i_ny_open       = input.session("0930-1600",  "NY Session",    group = grp_sessions)
+i_overnight     = input.session("1800-0930",  "Overnight Session", group = grp_sessions)
+i_asia          = input.session("1800-0000",  "Asia Session",  group = grp_sessions)
+i_london        = input.session("0200-0930",  "London Session",group = grp_sessions)
+i_ny_open_hour  = input.int(9,  "NY Open Hour",   minval = 0, maxval = 23, group = grp_sessions)
+i_ny_open_min   = input.int(30, "NY Open Minute", minval = 0, maxval = 59, group = grp_sessions)
+
+// ── Scoring Weights ──
+grp_weights = "Composite Score Weights"
+i_w_liq_dest  = input.float(20.0, "Liquidity Destination %",  group = grp_weights, minval = 0, maxval = 100)
+i_w_delivery  = input.float(20.0, "Price Delivery %",         group = grp_weights, minval = 0, maxval = 100)
+i_w_overnight = input.float(15.0, "Overnight Location %",     group = grp_weights, minval = 0, maxval = 100)
+i_w_sweep     = input.float(15.0, "Liquidity Sweep/Accept %", group = grp_weights, minval = 0, maxval = 100)
+i_w_vwap      = input.float(10.0, "VWAP State %",             group = grp_weights, minval = 0, maxval = 100)
+i_w_structure = input.float(10.0, "Market Structure %",       group = grp_weights, minval = 0, maxval = 100)
+i_w_fvg       = input.float(5.0,  "FVG Alignment %",          group = grp_weights, minval = 0, maxval = 100)
+i_w_path      = input.float(5.0,  "Liquidity Path %",         group = grp_weights, minval = 0, maxval = 100)
+
+// ── Liquidity Detection ──
+grp_liq = "Liquidity Detection"
+i_swing_len     = input.int(10, "Swing Point Lookback", group = grp_liq, minval = 3, maxval = 50)
+i_eq_threshold  = input.float(0.05, "Equal H/L Threshold (%)", group = grp_liq, minval = 0.01, maxval = 1.0)
+i_liq_lookback  = input.int(100, "Liquidity Lookback Bars", group = grp_liq, minval = 20, maxval = 500)
+
+// ── Visual Settings ──
+grp_vis = "Visual Settings"
+i_show_dashboard    = input.bool(true,  "Show Dashboard",         group = grp_vis)
+i_show_levels       = input.bool(true,  "Show Key Levels",        group = grp_vis)
+i_show_fvgs         = input.bool(true,  "Show FVGs",              group = grp_vis)
+i_show_projection   = input.bool(true,  "Show Projection Zone",   group = grp_vis)
+i_show_why          = input.bool(true,  "Show Why Explanation",   group = grp_vis)
+i_dash_x_offset     = input.int(0,      "Dashboard X Offset",     group = grp_vis)
+
+// ── FVG Settings ──
+grp_fvg = "FVG Settings"
+i_fvg_min_size  = input.float(0.02, "FVG Minimum Size (%)", group = grp_fvg, minval = 0.001, maxval = 2.0)
+i_fvg_lookback  = input.int(50,     "FVG Detection Lookback", group = grp_fvg, minval = 10, maxval = 200)
+
+// ── Colors ──
+grp_colors = "Colors"
+c_bull          = input.color(color.new(#00E676, 0),   "Bullish",       group = grp_colors)
+c_bear          = input.color(color.new(#FF1744, 0),   "Bearish",       group = grp_colors)
+c_neutral       = input.color(color.new(#FFD600, 0),   "Neutral",       group = grp_colors)
+c_pdh           = input.color(color.new(#2196F3, 70),  "PDH/PDL",       group = grp_colors)
+c_pwh           = input.color(color.new(#9C27B0, 70),  "PWH/PWL",       group = grp_colors)
+c_on            = input.color(color.new(#FF9800, 70),  "Overnight",     group = grp_colors)
+c_vwap          = input.color(color.new(#E91E63, 0),   "VWAP",          group = grp_colors)
+c_fvg_bull      = input.color(color.new(#00E676, 80),  "Bullish FVG",   group = grp_colors)
+c_fvg_bear      = input.color(color.new(#FF1744, 80),  "Bearish FVG",   group = grp_colors)
+c_proj_bull     = input.color(color.new(#00E676, 88),  "Projection (Bull)", group = grp_colors)
+c_proj_bear     = input.color(color.new(#FF1744, 88),  "Projection (Bear)", group = grp_colors)
+
+// ============================================================
+// ─── SECTION 1 — HELPER FUNCTIONS & CONSTANTS ───────────────
+// ============================================================
+
+// Clamp a value between lo and hi
+f_clamp(v, lo, hi) =>
+    math.max(lo, math.min(hi, v))
+
+// Map a value from [inMin, inMax] to [outMin, outMax]
+f_remap(v, inMin, inMax, outMin, outMax) =>
+    inRange = inMax - inMin
+    inRange == 0 ? outMin : outMin + (outMax - outMin) * (v - inMin) / inRange
+
+// Check if a bar timestamp is inside a given session string
+f_in_session(sess) =>
+    not na(time(timeframe.period, sess, i_tz))
+
+// (Session-start detection is computed inline in Section 2 using the
+//  per-session boolean series and its [1] history, which is more robust
+//  than applying the history operator to a function-call result.)
+
+// Price as percentage of a range
+f_pct_of_range(price, lo, hi) =>
+    rng = hi - lo
+    rng == 0 ? 50.0 : (price - lo) / rng * 100.0
+
+// Body-to-range ratio (0–1)
+f_body_ratio(o, c, h, l) =>
+    rng = h - l
+    rng == 0 ? 0.0 : math.abs(c - o) / rng
+
+// ============================================================
+// ─── SECTION 2 — SESSION HIGH/LOW TRACKING ──────────────────
+// ============================================================
+
+// ── NY Session ──
+var float ny_open_price    = na
+var float ny_open5_high    = na
+var float ny_open5_low     = na
+var float ny_open5_close   = na
+var bool  ny_open5_settled = false
+var int   ny_bar_count     = 0
+var float ny_session_high  = na
+var float ny_session_low   = na
+
+// ── Overnight ──
+var float on_high      = na
+var float on_low       = na
+var float on_vwap      = na
+var float on_vol_sum   = na
+var float on_pv_sum    = na
+
+// ── Asia ──
+var float asia_high    = na
+var float asia_low     = na
+
+// ── London ──
+var float london_high  = na
+var float london_low   = na
+
+// ── Previous Day ──
+var float pdh          = na
+var float pdl          = na
+var float prev_close   = na
+
+// ── Previous Week ──
+var float pwh          = na
+var float pwl          = na
+
+// Detect sessions (current bar membership)
+bool is_in_ny     = f_in_session(i_ny_open)
+bool is_in_on     = f_in_session(i_overnight)
+bool is_in_asia   = f_in_session(i_asia)
+bool is_in_london = f_in_session(i_london)
+
+// Detect session starts (first bar of each session) using [1] history on a series var
+bool is_ny_start     = is_in_ny     and not is_in_ny[1]
+bool is_on_start     = is_in_on     and not is_in_on[1]
+bool is_asia_start   = is_in_asia   and not is_in_asia[1]
+bool is_london_start = is_in_london and not is_in_london[1]
+
+// ── Previous Day H/L (daily timeframe request) ──
+[d_high_req, d_low_req, d_close_req] = request.security(syminfo.tickerid, "D",
+     [high[1], low[1], close[1]], lookahead = barmerge.lookahead_off)
+
+// ── Previous Week H/L (weekly timeframe request) ──
+[w_high_req, w_low_req] = request.security(syminfo.tickerid, "W",
+     [high[1], low[1]], lookahead = barmerge.lookahead_off)
+
+if not na(d_high_req)
+    pdh        := d_high_req
+    pdl        := d_low_req
+    prev_close := d_close_req
+
+if not na(w_high_req)
+    pwh := w_high_req
+    pwl := w_low_req
+
+// ── NY Session Tracking ──
+if is_ny_start
+    ny_open_price    := open
+    ny_open5_high    := high
+    ny_open5_low     := low
+    ny_open5_close   := close
+    ny_open5_settled := false
+    ny_bar_count     := 1
+    ny_session_high  := high
+    ny_session_low   := low
+else if is_in_ny
+    ny_bar_count := ny_bar_count + 1
+    ny_session_high := math.max(ny_session_high, high)
+    ny_session_low  := math.min(ny_session_low, low)
+    // Track 5-min opening candle (first 5 bars on 1-min, 1 bar on 5-min)
+    int bars_per_5min = timeframe.multiplier <= 1 ? 5 : 1
+    if ny_bar_count <= bars_per_5min
+        ny_open5_high  := math.max(ny_open5_high, high)
+        ny_open5_low   := math.min(ny_open5_low, low)
+        ny_open5_close := close
+    if ny_bar_count == bars_per_5min
+        ny_open5_settled := true
+
+// ── Overnight Tracking ──
+if is_on_start
+    on_high    := high
+    on_low     := low
+    on_vwap    := na
+    on_vol_sum := na
+    on_pv_sum  := na
+else if is_in_on
+    on_high := math.max(on_high, high)
+    on_low  := math.min(on_low,  low)
+
+// ── Asia Tracking ──
+if is_asia_start
+    asia_high := high
+    asia_low  := low
+else if is_in_asia
+    asia_high := math.max(asia_high, high)
+    asia_low  := math.min(asia_low,  low)
+
+// ── London Tracking ──
+if is_london_start
+    london_high := high
+    london_low  := low
+else if is_in_london
+    london_high := math.max(london_high, high)
+    london_low  := math.min(london_low,  low)
+
+// Derived overnight values
+float on_mid    = na(on_high) or na(on_low) ? na : (on_high + on_low) / 2.0
+float on_range  = na(on_high) or na(on_low) ? na : on_high - on_low
+
+// ============================================================
+// ─── SECTION 3 — NY VWAP ENGINE ─────────────────────────────
+// ============================================================
+
+var float vwap_pv_sum  = 0.0
+var float vwap_vol_sum = 0.0
+var float ny_vwap      = na
+
+// Reset VWAP at NY session open
+if is_ny_start
+    vwap_pv_sum  := 0.0
+    vwap_vol_sum := 0.0
+
+if is_in_ny
+    float tp = (high + low + close) / 3.0
+    vwap_pv_sum  += tp * volume
+    vwap_vol_sum += volume
+    ny_vwap       := vwap_pv_sum / vwap_vol_sum
+
+// VWAP State Detection
+// Track consecutive closes above/below VWAP
+var int  vwap_consec_above = 0
+var int  vwap_consec_below = 0
+var int  vwap_cross_count  = 0
+var bool vwap_was_above    = false
+
+// Reset VWAP state counters at NY session start
+if is_ny_start
+    vwap_consec_above := 0
+    vwap_consec_below := 0
+    vwap_cross_count  := 0
+    vwap_was_above    := false
+
+if is_in_ny and not na(ny_vwap)
+    bool above_now = close > ny_vwap
+    bool above_prev = close[1] > ny_vwap[1]
+    if above_now
+        vwap_consec_above := vwap_consec_above + 1
+        vwap_consec_below := 0
+    else
+        vwap_consec_below := vwap_consec_below + 1
+        vwap_consec_above := 0
+    // Count crosses
+    if above_now != above_prev
+        vwap_cross_count := vwap_cross_count + 1
+    vwap_was_above := above_now
+
+// VWAP score: 0=strongly below, 50=neutral/choppy, 100=strongly above
+// > 3 crosses = rotational
+float vwap_score = 50.0
+string vwap_state_label = "NEUTRAL"
+
+if is_in_ny and not na(ny_vwap)
+    if vwap_cross_count >= 4
+        vwap_score      := 50.0
+        vwap_state_label := "ROTATIONAL / CHOP"
+    else if vwap_consec_above >= 3
+        vwap_score      := 80.0 + math.min(20.0, float(vwap_consec_above) * 2.0)
+        vwap_score      := f_clamp(vwap_score, 50.0, 100.0)
+        vwap_state_label := "BULLISH ACCEPTANCE"
+    else if vwap_consec_below >= 3
+        vwap_score      := 20.0 - math.min(20.0, float(vwap_consec_below) * 2.0)
+        vwap_score      := f_clamp(vwap_score, 0.0, 50.0)
+        vwap_state_label := "BEARISH ACCEPTANCE"
+    else if close > ny_vwap and close[1] <= ny_vwap[1]
+        vwap_score      := 65.0
+        vwap_state_label := "VWAP RECLAIM"
+    else if close < ny_vwap and close[1] >= ny_vwap[1]
+        vwap_score      := 35.0
+        vwap_state_label := "VWAP LOSS"
+    else if close > ny_vwap
+        vwap_score      := 62.0
+        vwap_state_label := "ABOVE VWAP"
+    else
+        vwap_score      := 38.0
+        vwap_state_label := "BELOW VWAP"
+
+// ============================================================
+// ─── SECTION 4 — FVG ENGINE ─────────────────────────────────
+// ============================================================
+
+// FVG struct data stored in arrays (up to i_fvg_lookback FVGs)
+// Bullish FVG: gap between [2].high and [0].low (candle[1] is displacement up)
+// Bearish FVG: gap between [2].low  and [0].high (candle[1] is displacement down)
+
+var float[] fvg_top        = array.new_float(0)
+var float[] fvg_bot        = array.new_float(0)
+var int[]   fvg_dir        = array.new_int(0)   // 1=bull, -1=bear
+var int[]   fvg_state      = array.new_int(0)   // 0=fresh,1=partial,2=mitigated,3=failed,4=inverted
+var int[]   fvg_bar_idx    = array.new_int(0)
+
+// Detect new FVGs
+float min_fvg_pts = close * i_fvg_min_size / 100.0
+
+// Bullish FVG: candle[1] is strong bull, gap = high[2] to low[0] (if low[0] > high[2])
+if barstate.isconfirmed and bar_index > 2
+    float gap_bot = high[2]
+    float gap_top = low[0]
+    if gap_top > gap_bot and (gap_top - gap_bot) >= min_fvg_pts
+        array.push(fvg_top,     gap_top)
+        array.push(fvg_bot,     gap_bot)
+        array.push(fvg_dir,     1)
+        array.push(fvg_state,   0)
+        array.push(fvg_bar_idx, bar_index)
+    // Bearish FVG: gap = low[2] to high[0] (if high[0] < low[2])
+    float bg_bot = high[0]
+    float bg_top = low[2]
+    if bg_top > bg_bot and (bg_top - bg_bot) >= min_fvg_pts
+        array.push(fvg_top,     bg_top)
+        array.push(fvg_bot,     bg_bot)
+        array.push(fvg_dir,     -1)
+        array.push(fvg_state,   0)
+        array.push(fvg_bar_idx, bar_index)
+
+// Update FVG states based on current price action
+if barstate.islast and array.size(fvg_top) > 0
+    for i = 0 to array.size(fvg_top) - 1
+        float ftop = array.get(fvg_top, i)
+        float fbot = array.get(fvg_bot, i)
+        int   fdir = array.get(fvg_dir,  i)
+        int   fst  = array.get(fvg_state, i)
+        // If price has moved through more than 50% of the FVG
+        if fst == 0 or fst == 1
+            float fill_pct = fdir == 1 ?
+                 (f_clamp(low - fbot, 0.0, ftop - fbot)) / (ftop - fbot) :
+                 (f_clamp(ftop - high, 0.0, ftop - fbot)) / (ftop - fbot)
+            // Inversion: price closed entirely through the FVG from the "wrong" side
+            if fdir == 1 and close < fbot
+                array.set(fvg_state, i, 4)   // inverted
+            else if fdir == -1 and close > ftop
+                array.set(fvg_state, i, 4)  // inverted
+            else if fill_pct > 0.8
+                array.set(fvg_state, i, 2)  // mitigated
+            else if fill_pct > 0.3
+                array.set(fvg_state, i, 1)  // partial
+
+// Trim old FVGs beyond lookback
+while array.size(fvg_top) > i_fvg_lookback
+    array.shift(fvg_top)
+    array.shift(fvg_bot)
+    array.shift(fvg_dir)
+    array.shift(fvg_state)
+    array.shift(fvg_bar_idx)
+
+// FVG directional score: net bull minus bear from fresh/partial FVGs
+float fvg_bull_score = 0.0
+float fvg_bear_score = 0.0
+int   fvg_fresh_bull = 0
+int   fvg_fresh_bear = 0
+
+if array.size(fvg_dir) > 0
+    for i = 0 to array.size(fvg_dir) - 1
+        int   fdir = array.get(fvg_dir,   i)
+        int   fst  = array.get(fvg_state, i)
+        int   fidx = array.get(fvg_bar_idx, i)
+        float recency = f_clamp(1.0 - float(bar_index - fidx) / 100.0, 0.0, 1.0)
+        if fst <= 1  // fresh or partial
+            if fdir == 1
+                fvg_bull_score += recency * 10.0
+                fvg_fresh_bull += 1
+            else
+                fvg_bear_score += recency * 10.0
+                fvg_fresh_bear += 1
+
+float fvg_net   = fvg_bull_score - fvg_bear_score
+float fvg_score = f_clamp(50.0 + fvg_net * 2.0, 0.0, 100.0)
+
+string fvg_label = fvg_net > 5.0 ? "BULLISH ALIGNMENT" :
+                   fvg_net < -5.0 ? "BEARISH ALIGNMENT" : "MIXED / NEUTRAL"
+
+// ============================================================
+// ─── SECTION 5 — MARKET STRUCTURE ENGINE ────────────────────
+// ============================================================
+
+// Identify swing highs and swing lows
+float swing_high = ta.pivothigh(high, i_swing_len, i_swing_len)
+float swing_low  = ta.pivotlow(low,   i_swing_len, i_swing_len)
+
+// Track recent swing points (last 5 of each)
+var float[] sh_prices = array.new_float(0)
+var float[] sl_prices = array.new_float(0)
+var int[]   sh_bars   = array.new_int(0)
+var int[]   sl_bars   = array.new_int(0)
+
+if not na(swing_high)
+    array.push(sh_prices, swing_high)
+    array.push(sh_bars,   bar_index - i_swing_len)
+    if array.size(sh_prices) > 10
+        array.shift(sh_prices)
+        array.shift(sh_bars)
+
+if not na(swing_low)
+    array.push(sl_prices, swing_low)
+    array.push(sl_bars,   bar_index - i_swing_len)
+    if array.size(sl_prices) > 10
+        array.shift(sl_prices)
+        array.shift(sl_bars)
+
+// Structure: compare last two swing highs and swing lows
+bool hh = false  // higher high
+bool hl = false  // higher low
+bool lh = false  // lower high
+bool ll = false  // lower low
+bool bos_bull = false  // break of structure bullish
+bool bos_bear = false  // break of structure bearish
+
+if array.size(sh_prices) >= 2
+    float prev_sh = array.get(sh_prices, array.size(sh_prices) - 2)
+    float last_sh = array.get(sh_prices, array.size(sh_prices) - 1)
+    hh := last_sh > prev_sh
+    lh := last_sh < prev_sh
+    // BOS bull: price breaks above the most recent swing high
+    if close > last_sh and close[1] <= last_sh
+        bos_bull := true
+
+if array.size(sl_prices) >= 2
+    float prev_sl = array.get(sl_prices, array.size(sl_prices) - 2)
+    float last_sl = array.get(sl_prices, array.size(sl_prices) - 1)
+    hl := last_sl > prev_sl
+    ll := last_sl < prev_sl
+    // BOS bear: price breaks below the most recent swing low
+    if close < last_sl and close[1] >= last_sl
+        bos_bear := true
+
+// Structure score: 0=strongly bearish, 100=strongly bullish
+float ms_score = 50.0
+
+if hh and hl
+    ms_score := 80.0
+else if hh and not hl
+    ms_score := 65.0
+else if ll and lh
+    ms_score := 20.0
+else if ll and not lh
+    ms_score := 35.0
+else if lh and hl
+    ms_score := 50.0  // mixed
+
+if bos_bull
+    ms_score := math.min(100.0, ms_score + 15.0)
+if bos_bear
+    ms_score := math.max(0.0,   ms_score - 15.0)
+
+string ms_label = ms_score >= 75.0 ? "BULLISH (HH+HL)" :
+                  ms_score >= 60.0 ? "WEAKLY BULLISH" :
+                  ms_score <= 25.0 ? "BEARISH (LL+LH)" :
+                  ms_score <= 40.0 ? "WEAKLY BEARISH" : "MIXED"
+
+// ============================================================
+// ─── SECTION 6 — OVERNIGHT RANGE ENGINE ─────────────────────
+// ============================================================
+
+// Classify NY open location vs overnight range
+float on_loc_pct = na  // percent of overnight range
+
+string on_location_label = "UNKNOWN"
+string on_state_label    = "UNKNOWN"
+
+// Overnight range score: influences projection based on location and behavior
+float on_score = 50.0
+
+if not na(on_high) and not na(on_low) and not na(on_range) and on_range > 0
+    on_loc_pct := f_pct_of_range(close, on_low, on_high)
+
+    if close > on_high * 1.001
+        on_location_label := "ABOVE OVERNIGHT RANGE"
+        on_score          := 70.0
+    else if close < on_low * 0.999
+        on_location_label := "BELOW OVERNIGHT RANGE"
+        on_score          := 30.0
+    else if on_loc_pct >= 80.0
+        on_location_label := "UPPER 20% OF RANGE"
+        on_score          := 65.0
+    else if on_loc_pct >= 50.0
+        on_location_label := "UPPER HALF"
+        on_score          := 58.0
+    else if on_loc_pct >= 40.0 and on_loc_pct < 60.0
+        on_location_label := "NEAR MIDPOINT"
+        on_score          := 50.0
+    else if on_loc_pct >= 20.0
+        on_location_label := "LOWER HALF"
+        on_score          := 42.0
+    else
+        on_location_label := "LOWER 20% OF RANGE"
+        on_score          := 35.0
+
+// ============================================================
+// ─── SECTION 7 — LIQUIDITY SWEEP / TRAP ENGINE ──────────────
+// ============================================================
+
+// Track sweeps of major levels
+var bool sweep_on_high_detected   = false
+var bool sweep_on_low_detected    = false
+var bool sweep_pdh_detected       = false
+var bool sweep_pdl_detected       = false
+var bool sweep_lon_high_detected  = false
+var bool sweep_lon_low_detected   = false
+
+var bool sweep_on_high_accepted   = false  // closed back below = NO ACCEPT
+var bool sweep_on_low_accepted    = false
+var bool sweep_pdh_accepted       = false
+var bool sweep_pdl_accepted       = false
+
+// Detect wick sweep: wick through level but close back inside
+f_wick_sweep_above(level) =>
+    not na(level) and high > level and close < level
+
+f_wick_sweep_below(level) =>
+    not na(level) and low < level and close > level
+
+// Reset sweep flags at the start of each NY session
+if is_ny_start
+    sweep_on_high_detected  := false
+    sweep_on_low_detected   := false
+    sweep_pdh_detected      := false
+    sweep_pdl_detected      := false
+    sweep_lon_high_detected := false
+    sweep_lon_low_detected  := false
+    sweep_on_high_accepted  := false
+    sweep_on_low_accepted   := false
+    sweep_pdh_accepted      := false
+    sweep_pdl_accepted      := false
+
+// Only track sweeps during NY session
+if is_in_ny
+    if not na(on_high)
+        if high > on_high and close < on_high
+            sweep_on_high_detected := true
+            sweep_on_high_accepted := false
+        else if high > on_high and close >= on_high
+            sweep_on_high_detected := true
+            sweep_on_high_accepted := true
+
+    if not na(on_low)
+        if low < on_low and close > on_low
+            sweep_on_low_detected := true
+            sweep_on_low_accepted := false
+        else if low < on_low and close <= on_low
+            sweep_on_low_detected := true
+            sweep_on_low_accepted := true
+
+    if not na(pdh)
+        if high > pdh and close < pdh
+            sweep_pdh_detected  := true
+            sweep_pdh_accepted  := false
+        else if high > pdh and close >= pdh
+            sweep_pdh_detected  := true
+            sweep_pdh_accepted  := true
+
+    if not na(pdl)
+        if low < pdl and close > pdl
+            sweep_pdl_detected  := true
+            sweep_pdl_accepted  := false
+        else if low < pdl and close <= pdl
+            sweep_pdl_detected  := true
+            sweep_pdl_accepted  := true
+
+    if not na(london_high)
+        if high > london_high and close < london_high
+            sweep_lon_high_detected := true
+        if low < london_low and close > london_low
+            sweep_lon_low_detected := true
+
+// Sweep score: did sweeps set up continuation or reversal?
+float sweep_score = 50.0
+
+// Downside sweep + rejection = bullish
+if sweep_on_low_detected and not sweep_on_low_accepted
+    sweep_score := math.min(100.0, sweep_score + 20.0)
+if sweep_pdl_detected and not sweep_pdl_accepted
+    sweep_score := math.min(100.0, sweep_score + 15.0)
+
+// Upside sweep + rejection = bearish
+if sweep_on_high_detected and not sweep_on_high_accepted
+    sweep_score := math.max(0.0, sweep_score - 20.0)
+if sweep_pdh_detected and not sweep_pdh_accepted
+    sweep_score := math.max(0.0, sweep_score - 15.0)
+
+// Accepted above high = bullish continuation
+if sweep_on_high_accepted
+    sweep_score := math.min(100.0, sweep_score + 10.0)
+if sweep_pdh_accepted
+    sweep_score := math.min(100.0, sweep_score + 10.0)
+
+// Accepted below low = bearish continuation
+if sweep_on_low_accepted
+    sweep_score := math.max(0.0, sweep_score - 10.0)
+if sweep_pdl_accepted
+    sweep_score := math.max(0.0, sweep_score - 10.0)
+
+// ============================================================
+// ─── SECTION 8 — OPENING 5-MINUTE CANDLE ENGINE ─────────────
+// ============================================================
+
+string open5_state = "AWAITING"
+
+if is_in_ny and not na(ny_open_price)
+    float o5_body_ratio  = f_body_ratio(ny_open_price, ny_open5_close, ny_open5_high, ny_open5_low)
+    float o5_range       = ny_open5_high - ny_open5_low
+    float o5_bull_ext    = ny_open5_high - math.max(ny_open_price, ny_open5_close)
+    float o5_bear_ext    = math.min(ny_open_price, ny_open5_close) - ny_open5_low
+    bool  o5_is_bull     = ny_open5_close > ny_open_price
+    bool  o5_is_bear     = ny_open5_close < ny_open_price
+    float o5_wick_top    = ny_open5_high - math.max(ny_open_price, ny_open5_close)
+    float o5_wick_bot    = math.min(ny_open_price, ny_open5_close) - ny_open5_low
+    float wick_ratio     = o5_range > 0 ? math.max(o5_wick_top, o5_wick_bot) / o5_range : 0.0
+
+    // Classification logic
+    if o5_body_ratio >= 0.7 and o5_is_bull
+        open5_state := "BULLISH DISPLACEMENT"
+    else if o5_body_ratio >= 0.7 and o5_is_bear
+        open5_state := "BEARISH DISPLACEMENT"
+    else if wick_ratio >= 0.5 and o5_wick_top > o5_wick_bot
+        open5_state := "LIQUIDITY SWEEP (UPSIDE)"
+    else if wick_ratio >= 0.5 and o5_wick_bot > o5_wick_top
+        open5_state := "LIQUIDITY SWEEP (DOWNSIDE)"
+    else if wick_ratio >= 0.45
+        open5_state := "LIQUIDITY TRAP"
+    else if o5_body_ratio < 0.3 and wick_ratio < 0.4
+        open5_state := "ROTATIONAL / INDECISIVE"
+    else if o5_is_bull and o5_wick_bot > o5_body_ratio * o5_range
+        open5_state := "REVERSION (BULL)"
+    else if o5_is_bear and o5_wick_top > o5_body_ratio * o5_range
+        open5_state := "REVERSION (BEAR)"
+    else if not na(on_high) and not na(on_low)
+        if ny_open5_high > on_high or ny_open5_low < on_low
+            open5_state := "ACCEPTANCE / EXPANSION"
+        else
+            open5_state := "RANGE ROTATION"
+
+// ============================================================
+// ─── SECTION 9 — OPENING GAP ENGINE ─────────────────────────
+// ============================================================
+
+float gap_size       = na
+float gap_pct        = na
+string gap_label     = "NO GAP"
+float gap_score      = 50.0
+
+if not na(prev_close) and not na(ny_open_price)
+    gap_size := ny_open_price - prev_close
+    gap_pct  := math.abs(gap_size) / prev_close * 100.0
+
+    if gap_pct < 0.05
+        gap_label := "MINIMAL GAP"
+        gap_score := 50.0
+    else if gap_pct < 0.15
+        gap_label := gap_size > 0 ? "SMALL GAP UP" : "SMALL GAP DOWN"
+        gap_score := gap_size > 0 ? 55.0 : 45.0
+    else if gap_pct < 0.40
+        gap_label := gap_size > 0 ? "MODERATE GAP UP" : "MODERATE GAP DOWN"
+        gap_score := gap_size > 0 ? 60.0 : 40.0
+    else
+        gap_label := gap_size > 0 ? "LARGE GAP UP" : "LARGE GAP DOWN"
+        gap_score := gap_size > 0 ? 65.0 : 35.0
+
+    // Gap into liquidity increases reversal probability — adjust score
+    if not na(pdh) and gap_size > 0 and math.abs(ny_open_price - pdh) < syminfo.mintick * 20
+        gap_label := gap_label + " INTO PDH"
+        gap_score := math.max(0.0, gap_score - 10.0)
+    if not na(pdl) and gap_size < 0 and math.abs(ny_open_price - pdl) < syminfo.mintick * 20
+        gap_label := gap_label + " INTO PDL"
+        gap_score := math.min(100.0, gap_score + 10.0)
+
+// ============================================================
+// ─── SECTION 10 — LIQUIDITY POOL ENGINE ─────────────────────
+// ============================================================
+
+// Liquidity levels array: price, label, score, direction(1=above,-1=below)
+// We'll store the top-N levels for display
+var float[] liq_prices  = array.new_float(0)
+var string[] liq_labels  = array.new_string(0)
+var float[] liq_scores  = array.new_float(0)
+var int[]   liq_dirs    = array.new_int(0)    // 1 = above current price, -1 = below
+
+// Helper: score a liquidity level
+f_liq_score(level_price, base_score, is_swept, touch_count, recent) =>
+    float out = 0.0
+    if not na(level_price)
+        float dist_pct       = math.abs(close - level_price) / close * 100.0
+        float dist_penalty   = f_clamp(dist_pct * 3.0, 0.0, 40.0)
+        float sweep_penalty  = is_swept ? 20.0 : 0.0
+        float touch_bonus    = math.min(float(touch_count) * 5.0, 20.0)
+        float recency_bonus  = recent ? 10.0 : 0.0
+        out := f_clamp(base_score - dist_penalty - sweep_penalty + touch_bonus + recency_bonus, 0.0, 100.0)
+    out
+
+// Helper: push a scored level into the global liquidity arrays (arrays passed by reference)
+f_add_level(prices, labels, scores, dirs, price, lbl, base_score, swept) =>
+    if not na(price)
+        int   dir   = price > close ? 1 : -1
+        float score = f_liq_score(price, base_score, swept, 1, true)
+        array.push(prices, price)
+        array.push(labels, lbl)
+        array.push(scores, score)
+        array.push(dirs,   dir)
+    int dummy = 0
+
+// Rebuild liquidity pool array on each bar (on last confirmed bar for performance)
+if barstate.islast
+    array.clear(liq_prices)
+    array.clear(liq_labels)
+    array.clear(liq_scores)
+    array.clear(liq_dirs)
+
+    f_add_level(liq_prices, liq_labels, liq_scores, liq_dirs, pdh,         "PDH",    90.0, sweep_pdh_detected)
+    f_add_level(liq_prices, liq_labels, liq_scores, liq_dirs, pdl,         "PDL",    90.0, sweep_pdl_detected)
+    f_add_level(liq_prices, liq_labels, liq_scores, liq_dirs, pwh,         "PWH",    85.0, false)
+    f_add_level(liq_prices, liq_labels, liq_scores, liq_dirs, pwl,         "PWL",    85.0, false)
+    f_add_level(liq_prices, liq_labels, liq_scores, liq_dirs, on_high,     "ONH",    80.0, sweep_on_high_detected)
+    f_add_level(liq_prices, liq_labels, liq_scores, liq_dirs, on_low,      "ONL",    80.0, sweep_on_low_detected)
+    f_add_level(liq_prices, liq_labels, liq_scores, liq_dirs, on_mid,      "ON MID", 60.0, false)
+    f_add_level(liq_prices, liq_labels, liq_scores, liq_dirs, london_high, "LON H",  70.0, sweep_lon_high_detected)
+    f_add_level(liq_prices, liq_labels, liq_scores, liq_dirs, london_low,  "LON L",  70.0, sweep_lon_low_detected)
+    f_add_level(liq_prices, liq_labels, liq_scores, liq_dirs, asia_high,   "ASIA H", 65.0, false)
+    f_add_level(liq_prices, liq_labels, liq_scores, liq_dirs, asia_low,    "ASIA L", 65.0, false)
+    f_add_level(liq_prices, liq_labels, liq_scores, liq_dirs, prev_close,  "PREV C", 75.0, false)
+    if is_in_ny and not na(ny_open5_high)
+        f_add_level(liq_prices, liq_labels, liq_scores, liq_dirs, ny_open5_high, "O5H", 72.0, false)
+        f_add_level(liq_prices, liq_labels, liq_scores, liq_dirs, ny_open5_low,  "O5L", 72.0, false)
+
+    // Add recent swing points as liquidity
+    if array.size(sh_prices) > 0
+        for i = 0 to array.size(sh_prices) - 1
+            float sprice  = array.get(sh_prices, i)
+            int   sidx    = array.get(sh_bars,   i)
+            bool  recency = float(bar_index - sidx) < 50.0
+            float score   = recency ? 65.0 : 45.0
+            if not na(sprice)
+                int   dir = sprice > close ? 1 : -1
+                float sc  = f_liq_score(sprice, score, false, 1, recency)
+                array.push(liq_prices, sprice)
+                array.push(liq_labels, "SWG H")
+                array.push(liq_scores, sc)
+                array.push(liq_dirs,   dir)
+
+    if array.size(sl_prices) > 0
+        for i = 0 to array.size(sl_prices) - 1
+            float sprice  = array.get(sl_prices, i)
+            int   sidx    = array.get(sl_bars,   i)
+            bool  recency = float(bar_index - sidx) < 50.0
+            float score   = recency ? 65.0 : 45.0
+            if not na(sprice)
+                int   dir = sprice > close ? 1 : -1
+                float sc  = f_liq_score(sprice, score, false, 1, recency)
+                array.push(liq_prices, sprice)
+                array.push(liq_labels, "SWG L")
+                array.push(liq_scores, sc)
+                array.push(liq_dirs,   dir)
+
+// ── Compute best upside / downside liquidity target ──
+float best_up_price  = na
+float best_up_score  = 0.0
+string best_up_label = "N/A"
+float best_dn_price  = na
+float best_dn_score  = 0.0
+string best_dn_label = "N/A"
+
+float sec_up_price   = na
+float sec_up_score   = 0.0
+string sec_up_label  = "N/A"
+float sec_dn_price   = na
+float sec_dn_score   = 0.0
+string sec_dn_label  = "N/A"
+
+if barstate.islast and array.size(liq_prices) > 0
+    for i = 0 to array.size(liq_prices) - 1
+        float lp  = array.get(liq_prices, i)
+        float ls  = array.get(liq_scores, i)
+        int   ld  = array.get(liq_dirs,   i)
+        string ll = array.get(liq_labels,  i)
+        if ld == 1
+            if ls > best_up_score
+                sec_up_price  := best_up_price
+                sec_up_score  := best_up_score
+                sec_up_label  := best_up_label
+                best_up_price := lp
+                best_up_score := ls
+                best_up_label := ll
+            else if ls > sec_up_score
+                sec_up_price  := lp
+                sec_up_score  := ls
+                sec_up_label  := ll
+        else
+            if ls > best_dn_score
+                sec_dn_price  := best_dn_price
+                sec_dn_score  := best_dn_score
+                sec_dn_label  := best_dn_label
+                best_dn_price := lp
+                best_dn_score := ls
+                best_dn_label := ll
+            else if ls > sec_dn_score
+                sec_dn_price  := lp
+                sec_dn_score  := ls
+                sec_dn_label  := ll
+
+// ============================================================
+// ─── SECTION 11 — LIQUIDITY DELIVERY ENGINE ─────────────────
+// ============================================================
+
+// Score recent price delivery direction
+// Use last N bars to judge displacement quality
+
+int delivery_bars = math.min(bar_index, 20)
+float up_del_score  = 0.0
+float dn_del_score  = 0.0
+
+if delivery_bars > 1
+    for i = 0 to delivery_bars - 1
+        float c_body  = math.abs(close[i] - open[i])
+        float c_range = high[i] - low[i]
+        float c_br    = c_range > 0 ? c_body / c_range : 0.0
+        // Bull candle with body ratio > 0.5 = meaningful bull delivery
+        if close[i] > open[i] and c_br > 0.5
+            float weight = 1.0 - float(i) / float(delivery_bars) // recent = higher weight
+            up_del_score += c_br * weight * 10.0
+        // Bear candle
+        else if close[i] < open[i] and c_br > 0.5
+            float weight = 1.0 - float(i) / float(delivery_bars)
+            dn_del_score += c_br * weight * 10.0
+
+// HH/HL adds delivery confirmation
+if hh
+    up_del_score += 8.0
+if hl
+    up_del_score += 6.0
+if lh
+    dn_del_score += 8.0
+if ll
+    dn_del_score += 6.0
+
+// VWAP confirms delivery direction
+if vwap_consec_above >= 3
+    up_del_score += 10.0
+else if vwap_consec_below >= 3
+    dn_del_score += 10.0
+
+float del_total = up_del_score + dn_del_score
+float net_del   = del_total > 0 ? (up_del_score - dn_del_score) / del_total * 100.0 : 0.0
+
+// Delivery score: 0 = full bear, 100 = full bull, 50 = neutral
+float delivery_score = f_clamp(50.0 + net_del / 2.0, 0.0, 100.0)
+
+// Normalized 0–10 labels
+float del_up_norm = f_clamp(up_del_score / 5.0, 0.0, 10.0)
+float del_dn_norm = f_clamp(dn_del_score / 5.0, 0.0, 10.0)
+
+string delivery_label = delivery_score >= 70.0 ? "BULLISH (" + str.tostring(math.round(del_up_norm), "#.0") + "/10)" :
+                        delivery_score <= 30.0 ? "BEARISH (" + str.tostring(math.round(del_dn_norm), "#.0") + "/10)" :
+                                                 "NEUTRAL"
+
+// ============================================================
+// ─── SECTION 12 — LIQUIDITY DESTINATION ENGINE ──────────────
+// ============================================================
+
+// Determine the probable direction by combining:
+//   - which side has the better liquidity
+//   - whether price delivery is toward that liquidity
+//   - structure direction
+
+float liq_up_raw    = na(best_up_score) ? 0.0 : best_up_score
+float liq_dn_raw    = na(best_dn_score) ? 0.0 : best_dn_score
+float liq_dest_bull = 0.0
+float liq_dest_bear = 0.0
+
+// Weight: is delivery TOWARD that liquidity?
+// If price is above close and delivery is bullish → amplify upside
+float delivery_bias = (delivery_score - 50.0) / 50.0  // -1 to +1
+
+liq_dest_bull := liq_up_raw * (1.0 + delivery_bias * 0.5)
+liq_dest_bear := liq_dn_raw * (1.0 - delivery_bias * 0.5)
+
+float liq_dest_total = liq_dest_bull + liq_dest_bear
+float liq_dest_score = liq_dest_total > 0 ?
+     f_clamp(50.0 + (liq_dest_bull - liq_dest_bear) / liq_dest_total * 50.0, 0.0, 100.0) :
+     50.0
+
+// Liq above / below scores for dashboard (0–10)
+float liq_above_dash = f_clamp(best_up_score / 10.0, 0.0, 10.0)
+float liq_below_dash = f_clamp(best_dn_score / 10.0, 0.0, 10.0)
+
+// ============================================================
+// ─── SECTION 13 — LIQUIDITY PATH ENGINE ─────────────────────
+// ============================================================
+
+// Assess obstacles between current price and the primary target
+// Primary target depends on overall direction; check obstacles
+
+float path_score    = 70.0  // default: assume moderate path
+string path_label   = "MODERATE"
+
+// Determine primary target price
+float primary_target_price = na
+
+// We'll compute path after final direction is known (done in composite below)
+// For now, stub. Path score will be refined below.
+
+// ============================================================
+// ─── SECTION 14 — COMPOSITE AUCTION SCORE ───────────────────
+// ============================================================
+
+// Normalize component scores to 0–100, then weight them
+// Each score already in 0–100 range where >50 = bullish evidence
+
+float w_total = i_w_liq_dest + i_w_delivery + i_w_overnight + i_w_sweep +
+                i_w_vwap + i_w_structure + i_w_fvg + i_w_path
+
+// Weighted composite (0–100); 50 = perfectly neutral
+float composite_raw = na
+
+if is_in_ny or is_ny_start
+    composite_raw :=
+        (liq_dest_score  * i_w_liq_dest  +
+         delivery_score  * i_w_delivery  +
+         on_score        * i_w_overnight +
+         sweep_score     * i_w_sweep     +
+         vwap_score      * i_w_vwap      +
+         ms_score        * i_w_structure +
+         fvg_score       * i_w_fvg       +
+         path_score      * i_w_path) /
+        (w_total > 0 ? w_total : 100.0)
+else
+    composite_raw := 50.0
+
+float composite = f_clamp(composite_raw, 0.0, 100.0)
+
+// ── Direction classification ──
+bool  is_bullish  = composite >= 60.0
+bool  is_bearish  = composite <= 40.0
+bool  is_neutral  = not is_bullish and not is_bearish
+bool  is_no_trade = composite >= 45.0 and composite <= 55.0 and
+                    (vwap_cross_count >= 4 or (vwap_score > 42.0 and vwap_score < 58.0))
+
+string direction_label = is_no_trade  ? "NO CLEAR EDGE" :
+                         is_bullish   ? "▲ BULLISH"     :
+                         is_bearish   ? "▼ BEARISH"     : "◆ NEUTRAL"
+
+color direction_color  = is_no_trade  ? c_neutral :
+                         is_bullish   ? c_bull     :
+                         is_bearish   ? c_bear     : c_neutral
+
+// Confidence label
+string confidence_label =
+         composite >= 90.0 ? "EXTREME CONFLUENCE"         :
+         composite >= 75.0 ? "HIGH-CONVICTION"            :
+         composite >= 60.0 ? "MODERATE DIRECTIONAL CASE"  :
+         composite >= 45.0 ? "CONFLICTING"                :
+                             "LOW QUALITY / NO CLEAR EDGE"
+
+// ── Assign primary/secondary targets based on direction ──
+string primary_target_label   = "N/A"
+string secondary_target_label = "N/A"
+float  primary_target_val     = na
+float  secondary_target_val   = na
+
+if is_bullish or composite > 50.0
+    primary_target_label   := best_up_label
+    primary_target_val     := best_up_price
+    secondary_target_label := sec_up_label
+    secondary_target_val   := sec_up_price
+else if is_bearish or composite < 50.0
+    primary_target_label   := best_dn_label
+    primary_target_val     := best_dn_price
+    secondary_target_label := sec_dn_label
+    secondary_target_val   := sec_dn_price
+
+// ── Liquidity Path Score (now we know the target) ──
+// Count obstacles between price and primary target
+int obstacle_count = 0
+
+if not na(primary_target_val) and array.size(liq_prices) > 0
+    for i = 0 to array.size(liq_prices) - 1
+        float lp = array.get(liq_prices, i)
+        if not na(lp) and lp != primary_target_val
+            bool in_path = (primary_target_val > close) ? (lp > close and lp < primary_target_val) :
+                                                          (lp < close and lp > primary_target_val)
+            if in_path
+                obstacle_count += 1
+
+// FVGs in path also count
+if not na(primary_target_val) and array.size(fvg_top) > 0
+    for i = 0 to array.size(fvg_top) - 1
+        float ft = array.get(fvg_top, i)
+        float fb = array.get(fvg_bot, i)
+        int   fd = array.get(fvg_dir,  i)
+        int   fs = array.get(fvg_state, i)
+        if fs <= 1  // fresh or partial
+            bool in_path = (primary_target_val > close) ?
+                 (ft > close and fb < primary_target_val) :
+                 (fb < close and ft > primary_target_val)
+            bool obstructing = in_path and ((primary_target_val > close and fd == -1) or
+                                            (primary_target_val < close and fd == 1))
+            if obstructing
+                obstacle_count += 1
+
+path_score := f_clamp(100.0 - float(obstacle_count) * 12.0, 20.0, 100.0)
+path_label  := path_score >= 80.0 ? "CLEAN (" + str.tostring(math.round(path_score)) + "/100)" :
+               path_score >= 60.0 ? "MODERATE (" + str.tostring(math.round(path_score)) + "/100)" :
+                                    "OBSTRUCTED (" + str.tostring(math.round(path_score)) + "/100)"
+
+// Recompute composite with updated path score
+composite_raw :=
+    (liq_dest_score  * i_w_liq_dest  +
+     delivery_score  * i_w_delivery  +
+     on_score        * i_w_overnight +
+     sweep_score     * i_w_sweep     +
+     vwap_score      * i_w_vwap      +
+     ms_score        * i_w_structure +
+     fvg_score       * i_w_fvg       +
+     path_score      * i_w_path) /
+    (w_total > 0 ? w_total : 100.0)
+
+composite := f_clamp(composite_raw, 0.0, 100.0)
+
+// ── Re-classify direction from the FINAL composite (includes path score) ──
+is_bullish  := composite >= 60.0
+is_bearish  := composite <= 40.0
+is_neutral  := not is_bullish and not is_bearish
+is_no_trade := composite >= 45.0 and composite <= 55.0 and
+               (vwap_cross_count >= 4 or (vwap_score > 42.0 and vwap_score < 58.0))
+
+direction_label := is_no_trade  ? "NO CLEAR EDGE" :
+                   is_bullish   ? "▲ BULLISH"     :
+                   is_bearish   ? "▼ BEARISH"     : "◆ NEUTRAL"
+
+direction_color := is_no_trade  ? c_neutral :
+                   is_bullish   ? c_bull     :
+                   is_bearish   ? c_bear     : c_neutral
+
+confidence_label := composite >= 90.0 ? "EXTREME CONFLUENCE"         :
+                    composite >= 75.0 ? "HIGH-CONVICTION"            :
+                    composite >= 60.0 ? "MODERATE DIRECTIONAL CASE"  :
+                    composite >= 45.0 ? "CONFLICTING"                :
+                                        "LOW QUALITY / NO CLEAR EDGE"
+
+// ── Invalidation Level ──
+string invalidation_label = "N/A"
+
+if is_bullish
+    // Invalidation = loss of NY VWAP or opening low
+    string vwap_inv = not na(ny_vwap) ? " / VWAP Loss" : ""
+    string o5l_inv  = not na(ny_open5_low)  ? "Opening Low" : ""
+    string onl_inv  = not na(on_low)        ? "ONL" : ""
+    invalidation_label := o5l_inv + " / " + onl_inv + vwap_inv
+else if is_bearish
+    string vwap_inv = not na(ny_vwap) ? " / VWAP Reclaim" : ""
+    string o5h_inv  = not na(ny_open5_high) ? "Opening High" : ""
+    string onh_inv  = not na(on_high)       ? "ONH" : ""
+    invalidation_label := o5h_inv + " / " + onh_inv + vwap_inv
+else
+    invalidation_label := "Clear break of overnight range"
+
+// ============================================================
+// ─── SECTION 15 — SCENARIO FLIP DETECTION ───────────────────
+// ============================================================
+
+var float   last_composite       = composite
+var bool    thesis_just_flipped  = false
+var string  flip_reason          = ""
+
+// Check for notable direction change
+bool was_bullish_prev = last_composite >= 60.0
+bool was_bearish_prev = last_composite <= 40.0
+
+// Detect flip conditions
+if is_bullish and was_bearish_prev
+    thesis_just_flipped := true
+    flip_reason         := "THESIS FLIP: BEARISH → BULLISH"
+else if is_bearish and was_bullish_prev
+    thesis_just_flipped := true
+    flip_reason         := "THESIS FLIP: BULLISH → BEARISH"
+else
+    thesis_just_flipped := false
+
+last_composite := composite
+
+// Flip conditions text
+string flip_conditions = ""
+if is_bullish
+    flip_conditions := "• Loss of VWAP\n• Failure below ONM/ONL\n• Bearish displacement\n• Opening low violation"
+else if is_bearish
+    flip_conditions := "• VWAP reclaim\n• Break above ONM/ONH\n• Bullish displacement\n• Opening high violation"
+else
+    flip_conditions := "• Decisive break of overnight range\n• Strong FVG + sweep alignment"
+
+// ============================================================
+// ─── SECTION 16 — WHY? EXPLANATION ENGINE ───────────────────
+// ============================================================
+
+// Collect reasons into an array (max 6 displayed). Each reason is pushed
+// with f_push_reason() which guards against overflow and auto-numbers.
+
+// Helper: conditionally push a reason into the reasons array (by reference)
+f_push_reason(reasons, cond, txt) =>
+    if cond and array.size(reasons) < 6
+        array.push(reasons, str.tostring(array.size(reasons) + 1) + ". " + txt)
+    int dummy = 0
+
+var string[] reasons_arr = array.new_string(0)
+array.clear(reasons_arr)
+
+if is_bullish
+    f_push_reason(reasons_arr, sweep_on_low_detected and not sweep_on_low_accepted,
+         "ONL swept and rejected (sell-side liquidity cleared)")
+    f_push_reason(reasons_arr, sweep_pdl_detected and not sweep_pdl_accepted,
+         "PDL swept and rejected (downside liquidity cleared)")
+    f_push_reason(reasons_arr, not na(on_mid) and close > on_mid,
+         "Price trading above the overnight midpoint")
+    f_push_reason(reasons_arr, vwap_state_label == "BULLISH ACCEPTANCE" or vwap_state_label == "VWAP RECLAIM",
+         "Price accepting above NY VWAP")
+    f_push_reason(reasons_arr, hh and hl,
+         "Market structure: higher highs + higher lows")
+    f_push_reason(reasons_arr, not na(best_up_label) and best_up_label != "N/A" and best_up_score >= 60.0,
+         best_up_label + " is the strongest untouched liquidity above")
+    f_push_reason(reasons_arr, fvg_fresh_bull > 0,
+         "Fresh bullish FVG(s) supporting the upward path")
+    f_push_reason(reasons_arr, path_score >= 75.0,
+         "Relatively clean liquidity path toward the target")
+else if is_bearish
+    f_push_reason(reasons_arr, sweep_on_high_detected and not sweep_on_high_accepted,
+         "ONH swept and rejected (buy-side liquidity cleared)")
+    f_push_reason(reasons_arr, sweep_pdh_detected and not sweep_pdh_accepted,
+         "PDH swept and rejected (upside liquidity cleared)")
+    f_push_reason(reasons_arr, not na(on_mid) and close < on_mid,
+         "Price trading below the overnight midpoint")
+    f_push_reason(reasons_arr, vwap_state_label == "BEARISH ACCEPTANCE" or vwap_state_label == "VWAP LOSS",
+         "Price accepting below NY VWAP")
+    f_push_reason(reasons_arr, lh and ll,
+         "Market structure: lower highs + lower lows")
+    f_push_reason(reasons_arr, not na(best_dn_label) and best_dn_label != "N/A" and best_dn_score >= 60.0,
+         best_dn_label + " is the strongest untouched liquidity below")
+    f_push_reason(reasons_arr, fvg_fresh_bear > 0,
+         "Fresh bearish FVG(s) supporting the downward path")
+    f_push_reason(reasons_arr, path_score >= 75.0,
+         "Relatively clean liquidity path toward the target")
+else
+    f_push_reason(reasons_arr, true,
+         "Liquidity exists on both sides with no decisive delivery")
+    f_push_reason(reasons_arr, vwap_cross_count >= 4,
+         "Repeated VWAP crosses — rotational auction")
+    f_push_reason(reasons_arr, not na(on_range) and on_range > 0 and (ny_session_high - ny_session_low) < on_range * 0.5,
+         "Price rotating inside a tight range")
+
+// Fallback if nothing qualified
+if array.size(reasons_arr) == 0
+    array.push(reasons_arr, "1. Conditions are mixed — no clear directional edge")
+
+// Build the reason block string
+string reasons_text = ""
+if array.size(reasons_arr) > 0
+    for i = 0 to array.size(reasons_arr) - 1
+        reasons_text := reasons_text + array.get(reasons_arr, i) + (i < array.size(reasons_arr) - 1 ? "\n" : "")
+
+// ============================================================
+// ─── SECTION 17 — PLOT LEVELS & VISUAL ELEMENTS ─────────────
+// ============================================================
+
+// ── Static level plots ──
+plot(i_show_levels ? pdh         : na, "PDH",       color = c_pdh,   linewidth = 1, style = plot.style_linebr)
+plot(i_show_levels ? pdl         : na, "PDL",       color = c_pdh,   linewidth = 1, style = plot.style_linebr)
+plot(i_show_levels ? pwh         : na, "PWH",       color = c_pwh,   linewidth = 1, style = plot.style_linebr)
+plot(i_show_levels ? pwl         : na, "PWL",       color = c_pwh,   linewidth = 1, style = plot.style_linebr)
+plot(i_show_levels ? on_high     : na, "ONH",       color = c_on,    linewidth = 1, style = plot.style_linebr)
+plot(i_show_levels ? on_low      : na, "ONL",       color = c_on,    linewidth = 1, style = plot.style_linebr)
+plot(i_show_levels ? on_mid      : na, "ON MID",    color = color.new(c_on, 40), linewidth = 1, style = plot.style_linebr)
+plot(i_show_levels ? ny_vwap     : na, "VWAP",      color = c_vwap,  linewidth = 2, style = plot.style_linebr)
+plot(i_show_levels ? ny_open5_high : na, "O5 High", color = color.new(color.white, 60), linewidth = 1, style = plot.style_linebr)
+plot(i_show_levels ? ny_open5_low  : na, "O5 Low",  color = color.new(color.white, 60), linewidth = 1, style = plot.style_linebr)
+
+// ── Dynamic labels for levels (drawn once on last bar) ──
+var label   lbl_pdh         = na
+var label   lbl_pdl         = na
+var label   lbl_pwh         = na
+var label   lbl_pwl         = na
+var label   lbl_onh         = na
+var label   lbl_onl         = na
+var label   lbl_onm         = na
+
+// Level labels
+if barstate.islast and i_show_levels
+    label.delete(lbl_pdh) ; label.delete(lbl_pdl)
+    label.delete(lbl_pwh) ; label.delete(lbl_pwl)
+    label.delete(lbl_onh) ; label.delete(lbl_onl) ; label.delete(lbl_onm)
+
+    if not na(pdh)
+        lbl_pdh := label.new(bar_index + 2, pdh, "PDH", color = color.new(c_pdh,60), textcolor = c_pdh, size = size.tiny, style = label.style_label_left)
+    if not na(pdl)
+        lbl_pdl := label.new(bar_index + 2, pdl, "PDL", color = color.new(c_pdh,60), textcolor = c_pdh, size = size.tiny, style = label.style_label_left)
+    if not na(pwh)
+        lbl_pwh := label.new(bar_index + 2, pwh, "PWH", color = color.new(c_pwh,60), textcolor = c_pwh, size = size.tiny, style = label.style_label_left)
+    if not na(pwl)
+        lbl_pwl := label.new(bar_index + 2, pwl, "PWL", color = color.new(c_pwh,60), textcolor = c_pwh, size = size.tiny, style = label.style_label_left)
+    if not na(on_high)
+        lbl_onh := label.new(bar_index + 2, on_high, "ONH", color = color.new(c_on,60), textcolor = c_on, size = size.tiny, style = label.style_label_left)
+    if not na(on_low)
+        lbl_onl := label.new(bar_index + 2, on_low,  "ONL", color = color.new(c_on,60), textcolor = c_on, size = size.tiny, style = label.style_label_left)
+    if not na(on_mid)
+        lbl_onm := label.new(bar_index + 2, on_mid,  "ON MID", color = color.new(c_on,80), textcolor = color.new(c_on,20), size = size.tiny, style = label.style_label_left)
+
+// ── FVG Boxes ──
+var box[] fvg_boxes = array.new_box(0)
+
+// Remove all existing FVG boxes before redrawing
+if barstate.islast and i_show_fvgs
+    if array.size(fvg_boxes) > 0
+        for i = 0 to array.size(fvg_boxes) - 1
+            box.delete(array.get(fvg_boxes, i))
+    array.clear(fvg_boxes)
+
+    if array.size(fvg_top) > 0
+        // Only draw the most recent FVGs
+        int fvg_draw_start = math.max(0, array.size(fvg_top) - 8)
+        for i = fvg_draw_start to array.size(fvg_top) - 1
+            float ft  = array.get(fvg_top,     i)
+            float fb  = array.get(fvg_bot,     i)
+            int   fd  = array.get(fvg_dir,     i)
+            int   fs  = array.get(fvg_state,   i)
+            int   fidx = array.get(fvg_bar_idx, i)
+            color bc  = fs == 2 or fs == 3 or fs == 4 ?
+                         color.new(color.gray, 92) :
+                         fd == 1 ? c_fvg_bull : c_fvg_bear
+            box b = box.new(fidx, ft, bar_index + 10, fb, bgcolor = bc,
+                            border_color = color.new(color.gray, 80), border_width = 1)
+            array.push(fvg_boxes, b)
+
+// ── Projection Zone ──
+var box proj_box_1 = na
+var box proj_box_2 = na
+var line proj_line = na
+
+if barstate.islast and i_show_projection and is_in_ny
+    box.delete(proj_box_1)
+    box.delete(proj_box_2)
+    line.delete(proj_line)
+
+    color proj_col = is_bullish ? c_proj_bull : is_bearish ? c_proj_bear : color.new(c_neutral, 88)
+    color proj_line_col = is_bullish ? c_bull : is_bearish ? c_bear : c_neutral
+
+    // Primary target zone
+    if not na(primary_target_val)
+        float target_band = syminfo.mintick * 10.0
+        proj_box_1 := box.new(bar_index, primary_target_val + target_band,
+                              bar_index + 20, primary_target_val - target_band,
+                              bgcolor = proj_col, border_color = proj_line_col, border_width = 1)
+        // Projection line from current close to primary target
+        proj_line := line.new(bar_index, close, bar_index + 15, primary_target_val,
+                              color = proj_line_col, width = 2, style = line.style_dashed)
+
+    // Secondary target zone
+    if not na(secondary_target_val)
+        float target_band2 = syminfo.mintick * 10.0
+        proj_box_2 := box.new(bar_index + 20, secondary_target_val + target_band2,
+                              bar_index + 40, secondary_target_val - target_band2,
+                              bgcolor = proj_col, border_color = color.new(proj_line_col, 60), border_width = 1)
+
+// ── Sweep Labels ──
+// Mark sweep events on chart
+if sweep_on_high_detected and sweep_on_high_detected[1] == false
+    label.new(bar_index, high, "ONH\nSWEEP",
+              color = color.new(c_bear, 70), textcolor = c_bear,
+              size = size.tiny, style = label.style_label_down)
+
+if sweep_on_low_detected and sweep_on_low_detected[1] == false
+    label.new(bar_index, low, "ONL\nSWEEP",
+              color = color.new(c_bull, 70), textcolor = c_bull,
+              size = size.tiny, style = label.style_label_up)
+
+if sweep_pdh_detected and sweep_pdh_detected[1] == false
+    label.new(bar_index, high, "PDH\nSWEEP",
+              color = color.new(c_bear, 70), textcolor = c_bear,
+              size = size.tiny, style = label.style_label_down)
+
+if sweep_pdl_detected and sweep_pdl_detected[1] == false
+    label.new(bar_index, low, "PDL\nSWEEP",
+              color = color.new(c_bull, 70), textcolor = c_bull,
+              size = size.tiny, style = label.style_label_up)
+
+// ── Thesis Flip Label ──
+if thesis_just_flipped
+    label.new(bar_index, high, "⚠ " + flip_reason,
+              color = color.new(c_neutral, 60), textcolor = c_neutral,
+              size = size.small, style = label.style_label_down)
+
+// ── Opening 5-Min box ──
+var box open5_box = na
+if is_ny_start
+    box.delete(open5_box)
+
+if is_in_ny and ny_bar_count == 1
+    box.delete(open5_box)
+    open5_box := box.new(bar_index, ny_open5_high, bar_index + 5,
+                         ny_open5_low,
+                         bgcolor  = color.new(color.white, 93),
+                         border_color = color.new(color.white, 50),
+                         border_width = 1)
+
+if is_in_ny and not na(open5_box)
+    box.set_top(open5_box,    ny_open5_high)
+    box.set_bottom(open5_box, ny_open5_low)
+
+// ============================================================
+// ─── SECTION 18 — DASHBOARD ─────────────────────────────────
+// ============================================================
+
+var table dash = na
+
+// Helper: fill a two-column dashboard row (global scope; table passed by reference)
+f_row(tbl, r, lbl, val, val_col) =>
+    table.cell(tbl, 0, r, lbl,
+               text_color  = color.new(color.gray, 20),
+               text_size   = size.small,
+               bgcolor     = color.new(color.black, 20),
+               text_halign = text.align_right)
+    table.cell(tbl, 1, r, val,
+               text_color  = val_col,
+               text_size   = size.small,
+               bgcolor     = color.new(color.black, 30),
+               text_halign = text.align_left)
+    int dummy = 0
+
+if barstate.islast and i_show_dashboard
+    table.delete(dash)
+    dash := table.new(
+         position.top_right, 2, 22,
+         bgcolor      = color.new(color.black, 10),
+         border_color = color.new(color.gray, 60),
+         border_width = 1,
+         frame_color  = color.new(color.gray, 40),
+         frame_width  = 1)
+
+    // Row 0 — Header
+    table.cell(dash, 0, 0, "OPEN5",
+               text_color  = color.white,
+               text_size   = size.normal,
+               bgcolor     = color.new(color.navy, 10),
+               text_halign = text.align_right)
+    table.cell(dash, 1, 0, "AUCTION INTELLIGENCE",
+               text_color  = color.new(color.aqua, 10),
+               text_size   = size.normal,
+               bgcolor     = color.new(color.navy, 10),
+               text_halign = text.align_left)
+
+    // Row 1 — Direction
+    f_row(dash, 1, "DIRECTION", direction_label, direction_color)
+
+    // Row 2 — Score
+    f_row(dash, 2, "CONFIDENCE",
+          str.tostring(math.round(composite)) + "/100  " + confidence_label,
+          direction_color)
+
+    // Row 3 — Delivery
+    f_row(dash, 3, "DELIVERY", delivery_label,
+          delivery_score >= 60.0 ? c_bull : delivery_score <= 40.0 ? c_bear : c_neutral)
+
+    // Row 4 — Liq Above
+    f_row(dash, 4, "LIQ ABOVE",
+          str.tostring(math.round(liq_above_dash), "#.0") + "/10  (" + best_up_label + ")",
+          color.new(c_bull, 20))
+
+    // Row 5 — Liq Below
+    f_row(dash, 5, "LIQ BELOW",
+          str.tostring(math.round(liq_below_dash), "#.0") + "/10  (" + best_dn_label + ")",
+          color.new(c_bear, 20))
+
+    // Row 6 — Overnight Location
+    f_row(dash, 6, "ON LOCATION", on_location_label, color.new(c_on, 10))
+
+    // Row 7 — VWAP State
+    f_row(dash, 7, "VWAP STATE", vwap_state_label,
+          vwap_score >= 60.0 ? c_bull : vwap_score <= 40.0 ? c_bear : c_neutral)
+
+    // Row 8 — FVG
+    f_row(dash, 8, "FVG", fvg_label,
+          fvg_score >= 60.0 ? c_bull : fvg_score <= 40.0 ? c_bear : c_neutral)
+
+    // Row 9 — Market Structure
+    f_row(dash, 9, "STRUCTURE", ms_label,
+          ms_score >= 65.0 ? c_bull : ms_score <= 35.0 ? c_bear : c_neutral)
+
+    // Row 10 — Opening 5-min State
+    f_row(dash, 10, "O5 STATE", open5_state,
+          str.contains(open5_state, "BULL") ? c_bull :
+          str.contains(open5_state, "BEAR") ? c_bear : c_neutral)
+
+    // Row 11 — Gap
+    f_row(dash, 11, "GAP", gap_label,
+          gap_score >= 55.0 ? c_bull : gap_score <= 45.0 ? c_bear : c_neutral)
+
+    // Row 12 — Sweep State
+    string sweep_text = sweep_on_low_detected and not sweep_on_low_accepted ? "ONL SWEPT (NO ACCEPT)" :
+                        sweep_on_high_detected and not sweep_on_high_accepted ? "ONH SWEPT (NO ACCEPT)" :
+                        sweep_pdl_detected and not sweep_pdl_accepted ? "PDL SWEPT (NO ACCEPT)" :
+                        sweep_pdh_detected and not sweep_pdh_accepted ? "PDH SWEPT (NO ACCEPT)" :
+                        "NO MAJOR SWEEPS"
+    f_row(dash, 12, "SWEEPS", sweep_text,
+          str.contains(sweep_text, "NO ACCEPT") ? c_neutral : color.new(color.gray, 30))
+
+    // Row 13 — Liquidity Path
+    f_row(dash, 13, "LIQ PATH", path_label,
+          path_score >= 70.0 ? c_bull : path_score <= 50.0 ? c_bear : c_neutral)
+
+    // Row 14 — Primary Target
+    string pt_str = primary_target_label + (not na(primary_target_val) ?
+         "  (" + str.tostring(primary_target_val, format.mintick) + ")" : "")
+    f_row(dash, 14, "PRIMARY TGT", pt_str, direction_color)
+
+    // Row 15 — Secondary Target
+    string st_str = secondary_target_label + (not na(secondary_target_val) ?
+         "  (" + str.tostring(secondary_target_val, format.mintick) + ")" : "")
+    f_row(dash, 15, "2nd TARGET", st_str, color.new(direction_color, 30))
+
+    // Row 16 — Invalidation
+    f_row(dash, 16, "INVALIDATION", invalidation_label, color.new(c_neutral, 10))
+
+    // Row 17 — Flip Conditions header
+    table.cell(dash, 0, 17, "FLIP CONDITIONS",
+               text_color  = color.new(c_neutral, 0),
+               text_size   = size.small,
+               bgcolor     = color.new(color.black, 20),
+               text_halign = text.align_right)
+    table.cell(dash, 1, 17, "See label on chart",
+               text_color  = color.new(color.gray, 30),
+               text_size   = size.small,
+               bgcolor     = color.new(color.black, 30),
+               text_halign = text.align_left)
+
+    // Row 18 — WHY header
+    table.cell(dash, 0, 18, "WHY?",
+               text_color  = color.white,
+               text_size   = size.small,
+               bgcolor     = color.new(color.navy, 20),
+               text_halign = text.align_right)
+    table.cell(dash, 1, 18, direction_label + "  " + str.tostring(math.round(composite)) + "/100",
+               text_color  = direction_color,
+               text_size   = size.small,
+               bgcolor     = color.new(color.navy, 20),
+               text_halign = text.align_left)
+
+    // Row 19 — Reasons block
+    table.cell(dash, 0, 19, "",
+               text_color  = color.gray,
+               text_size   = size.small,
+               bgcolor     = color.new(color.black, 25))
+    table.cell(dash, 1, 19, reasons_text,
+               text_color  = color.new(color.white, 10),
+               text_size   = size.small,
+               bgcolor     = color.new(color.black, 25),
+               text_halign = text.align_left)
+
+    // Row 20 — Projection arrow
+    string proj_arrow = is_bullish ? "↑ → " + primary_target_label :
+                        is_bearish ? "↓ → " + primary_target_label :
+                                     "◆ → ROTATIONAL"
+    f_row(dash, 20, "PROJECTION", proj_arrow, direction_color)
+
+    // Row 21 — No-trade warning
+    if is_no_trade
+        table.cell(dash, 0, 21, "⚠ NO TRADE",
+                   text_color  = c_neutral,
+                   text_size   = size.normal,
+                   bgcolor     = color.new(c_neutral, 70),
+                   text_halign = text.align_right)
+        table.cell(dash, 1, 21, "DO NOTHING — NO CLEAR AUCTION EDGE",
+                   text_color  = c_neutral,
+                   text_size   = size.normal,
+                   bgcolor     = color.new(c_neutral, 70),
+                   text_halign = text.align_left)
+    else
+        table.cell(dash, 0, 21, "SESSION",
+                   text_color  = color.gray,
+                   text_size   = size.tiny,
+                   bgcolor     = color.new(color.black, 30))
+        table.cell(dash, 1, 21,
+                   is_in_ny ? "NY ACTIVE" : "PRE/POST MARKET",
+                   text_color  = is_in_ny ? c_bull : color.gray,
+                   text_size   = size.tiny,
+                   bgcolor     = color.new(color.black, 30))
+
+// ============================================================
+// ─── SECTION 19 — "WHY?" LABEL ON CHART ─────────────────────
+// ============================================================
+
+var label why_label = na
+
+if barstate.islast and i_show_why and is_in_ny
+    label.delete(why_label)
+
+    string why_dir_str = is_no_trade ? "⚠ NO CLEAR AUCTION EDGE" :
+                         is_bullish  ? "WHY " + direction_label + "  " + str.tostring(math.round(composite)) + "/100" :
+                         is_bearish  ? "WHY " + direction_label + "  " + str.tostring(math.round(composite)) + "/100" :
+                                       "WHY NEUTRAL  " + str.tostring(math.round(composite)) + "/100"
+    string why_full = why_dir_str + "\n" +
+                      reasons_text + "\n" +
+                      "→ TARGET: " + primary_target_label + "\n" +
+                      "→ INVALIDATION: " + invalidation_label + "\n" +
+                      "THESIS FLIP IF:\n" + flip_conditions
+
+    // Place label at current bar slightly above/below price
+    float label_y = is_bullish ? ny_open5_low  - (syminfo.mintick * 30) :
+                    is_bearish ? ny_open5_high + (syminfo.mintick * 30) :
+                    close
+
+    why_label := label.new(
+         bar_index - 10, label_y, why_full,
+         color      = color.new(color.black, 10),
+         textcolor  = direction_color,
+         size       = size.small,
+         style      = is_bullish ? label.style_label_up : label.style_label_down,
+         textalign  = text.align_left)
+
+// ============================================================
+// ─── SECTION 20 — ALERTS ────────────────────────────────────
+// ============================================================
+
+// High-conviction bullish auction thesis
+alertcondition(is_in_ny and is_bullish and composite >= 75.0,
+     title   = "OPEN5 — High-Conviction BULLISH",
+     message = "OPEN5: HIGH-CONVICTION BULLISH auction thesis forming")
+
+// High-conviction bearish auction thesis
+alertcondition(is_in_ny and is_bearish and composite >= 75.0,
+     title   = "OPEN5 — High-Conviction BEARISH",
+     message = "OPEN5: HIGH-CONVICTION BEARISH auction thesis forming")
+
+// Thesis flip
+alertcondition(thesis_just_flipped,
+     title   = "OPEN5 — Thesis Flip",
+     message = "OPEN5: Auction thesis has FLIPPED — re-evaluate the setup")
+
+// No-trade / no clear edge
+alertcondition(is_in_ny and is_no_trade,
+     title   = "OPEN5 — No Clear Edge",
+     message = "OPEN5: NO CLEAR AUCTION EDGE — stand down")
+
+// Major liquidity sweep with no acceptance
+bool sweep_no_accept_alert =
+     (sweep_on_high_detected and not sweep_on_high_accepted) or
+     (sweep_on_low_detected  and not sweep_on_low_accepted)  or
+     (sweep_pdh_detected     and not sweep_pdh_accepted)     or
+     (sweep_pdl_detected     and not sweep_pdl_accepted)
+alertcondition(is_in_ny and sweep_no_accept_alert,
+     title   = "OPEN5 — Liquidity Sweep / No Acceptance",
+     message = "OPEN5: Liquidity sweep detected with NO ACCEPTANCE — possible reversal")
+
+// ============================================================
+// ─── END — OPEN5 OPENING AUCTION INTELLIGENCE ───────────────
+// ============================================================
